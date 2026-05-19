@@ -120,7 +120,7 @@ let dependent_pattern ?(pattern_term=true) c =
     convert_concl ~cast:false ~check:false conclapp DEFAULTcast)
 
 let annot_of_context ctx =
-  Array.map_of_list Context.Rel.Declaration.get_annot (List.rev ctx)
+  Array.map_of_list Context.Rel.Declaration.get_annot (Context.Rel.to_list (Context.Rel.rev ctx))
 
 let depcase ~poly ((mind, i as ind), u) =
   let indid = Nametab.basename_of_global (GlobRef.IndRef ind) in
@@ -151,8 +151,8 @@ let depcase ~poly ((mind, i as ind), u) =
       let (args, arity) = decompose_prod_decls !evd substcty in
       let _, indices = decompose_app !evd arity in
       let _, indices = Array.chop nparams indices in
-      let ncargs = List.length args - nparams in
-      let realargs, pars = List.chop ncargs args in
+      let ncargs = Context.Rel.length args - nparams in
+      let realargs, pars = Context.Rel.chop ncargs args in
       let realargs = lift_rel_context (i + 1) realargs in
       let arity = applistc (mkRel (ncargs + i + 1))
         (Array.to_list indices @ [mkApp (mkConstructU ((ind, succ i), u),

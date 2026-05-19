@@ -97,18 +97,19 @@ let telescope_intro env sigma len tele =
     | _ -> mkRel n
   in aux len tele
 
-let telescope_of_context env sigma ctx =
+let telescope_of_context env sigma (ctx : rel_context) =
   let sigma, teleinterp = new_global sigma (Lazy.force logic_tele_interp) in
   let _, u = destConst sigma teleinterp in
-  let rec aux = function
-    | [] -> raise (Invalid_argument "Cannot make telescope out of empty context")
-    | [decl] ->
+  let rec aux ctx =
+    match Context.Rel.uncons ctx with
+    | None -> raise (Invalid_argument "Cannot make telescope out of empty context")
+    | Some (decl, tl) when Context.Rel.is_empty tl ->
       mkApp (mkRef (Lazy.force logic_tele_tip, u), [|get_type decl|])
-    | d :: tl ->
+    | Some (d, tl) ->
       let ty = get_type d in
       mkApp (mkRef (Lazy.force logic_tele_ext, u), [| ty; mkLambda (get_annot d, ty, aux tl) |])
   in
-  let tele = aux (List.rev ctx) in
+  let tele = aux (Context.Rel.rev ctx) in
   let tele_interp = mkApp (teleinterp, [| tele |]) in
   (* Infer universe constraints *)
   let sigma, _ = Typing.type_of env sigma tele_interp in
@@ -546,9 +547,9 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
 
   (* ===== FORWARD PASS ===== *)
   let rec compute_omitted prev_indices indices prev_ctx ctx omitted candidate nb =
-    match indices, ctx with
-    | [], [] -> omitted, nb, prev_indices, candidate
-    | idx :: indices, decl :: ctx ->
+    match indices, Context.Rel.uncons ctx with
+    | [], None -> omitted, nb, prev_indices, candidate
+    | idx :: indices, Some (decl, ctx) ->
         let omit, cand =
           (* Variable. *)
           if not (isRel !evd idx) then None, None
@@ -596,8 +597,8 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
         (* We know that [idx] is [Rel rel] and a candidate for omission. *)
         (* TODO Very inefficient... *)
         let new_decl = Context.Rel.Declaration.LocalAssum (anonR, goal) in
-        let after = new_decl :: CList.firstn (pred rel) ctx in
-        let omit = CList.for_all_i (fun i decl ->
+        let after = Context.Rel.add new_decl (Context.Rel.firstn (pred rel) ctx) in
+        let omit = Context.Rel.for_all_i (fun i decl ->
           let decl_ty = Context.Rel.Declaration.get_type decl in
           (* No dependency. *)
           not (Termops.dependent !evd (mkRel (rel - i)) decl_ty) ||
@@ -624,8 +625,9 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
    * need to introduce cutx, and [arity_ctx] has been left untouched. *)
 
   (* ===== STRENGTHENING ===== *)
-  let subst = Context_map.id_subst (arity_ctx @ ctx) in
-  let rev_subst = Context_map.id_subst (arity_ctx @ ctx) in
+  let return_ctx = Context.Rel.append arity_ctx ctx in
+  let subst = Context_map.id_subst return_ctx in
+  let rev_subst = Context_map.id_subst return_ctx in
   let subst, rev_subst = List.fold_left (
     fun (subst, rev_subst) -> function
     | None -> subst, rev_subst
@@ -644,7 +646,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
    (Context_map.mapping_constr !evd subst (EConstr.mkRel 1))) in
   (* [ctx'] is the context under which we will build the case in a first step. *)
   (* This is [ctx] where everything omitted and cut is removed. *)
-  let ctx' = List.skipn (nb_cuts_omit + oib.mind_nrealargs + 1) (rev_subst.Context_map.tgt_ctx) in
+  let ctx' = Context.Rel.skipn (nb_cuts_omit + oib.mind_nrealargs + 1) (rev_subst.Context_map.tgt_ctx) in
   let rev_subst' = List.skipn (nb_cuts_omit + oib.mind_nrealargs + 1) (rev_subst.Context_map.map_inst) in
   let rev_subst' = Context_map.lift_pats (-(oib.mind_nrealargs+1)) rev_subst' in
   let rev_subst_without_cuts = Context_map.mk_ctx_map env !evd ctx rev_subst' ctx' in
@@ -676,7 +678,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
    (Context_map.mapping_constr !evd subst (EConstr.mkRel 1))) in
   (* Also useful: a substitution from [ctx] to the context with cuts. *)
   let subst_to_cuts =
-    let lift_subst = Context_map.mk_ctx_map env !evd (arity_ctx @ ctx)
+    let lift_subst = Context_map.mk_ctx_map env !evd (Context.Rel.append arity_ctx ctx)
     (Context_map.lift_pats (oib.mind_nrealargs + 1) (Context_map.id_pats ctx))
     ctx in
       Context_map.compose_subst ~unsafe:true env ~sigma:!evd subst lift_subst
@@ -686,13 +688,13 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   let goal = Context_map.mapping_constr !evd subst_to_cuts goal in
 
   (* ===== CUTS ===== *)
-  let cuts_ctx, remaining = List.chop nb_cuts (subst.Context_map.src_ctx) in
-  let fresh_ctx = List.firstn (oib.mind_nrealargs + 1) remaining in
+  let cuts_ctx, remaining = Context.Rel.chop nb_cuts (subst.Context_map.src_ctx) in
+  let fresh_ctx = Context.Rel.firstn (oib.mind_nrealargs + 1) remaining in
   let revert_cut x =
     let rec revert_cut i = function
       | [] -> failwith "Could not revert a cut, please report."
       | Context_map.PRel y :: _ when Int.equal x y ->
-        (match nth cuts_ctx (pred x) with
+        (match Context.Rel.nth cuts_ctx (pred x) with
          | Context.Rel.Declaration.LocalAssum _ -> Some (EConstr.mkRel i)
          | Context.Rel.Declaration.LocalDef _ -> None)
       | _ :: l -> revert_cut (succ i) l
@@ -717,11 +719,11 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
               succ k, rev_sigctx, tele_lhs, tele_rhs
           | None -> (* Add a binder to the telescope. *)
               let rhs = EConstr.mkRel k in
-              succ k, decl :: rev_sigctx, idx :: tele_lhs, rhs :: tele_rhs
+              succ k, Context.Rel.add decl rev_sigctx, idx :: tele_lhs, rhs :: tele_rhs
 
-        ) (succ nb_cuts, [], [], []) arity_ctx' rev_indices' omitted
+        ) (succ nb_cuts, Context.Rel.empty, [], []) (Context.Rel.to_list arity_ctx') rev_indices' omitted
       in
-      let sigctx = List.rev rev_sigctx in
+      let sigctx = Context.Rel.rev rev_sigctx in
       let sigty, _, sigconstr = telescope (push_rel_context (subst.Context_map.src_ctx) env) evd sigctx in
 
       (* Build a goal with an equality of telescopes at the front. *)
@@ -759,7 +761,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   let full_subst =
     let pats = Context_map.id_pats ctx in
     let pats = Context_map.lift_pats (oib.mind_nrealargs + 1) pats in
-    let ctx' = arity_ctx @ ctx in
+    let ctx' = Context.Rel.append arity_ctx ctx in
       Context_map.mk_ctx_map env !evd ctx' pats ctx
   in
   let full_subst = Context_map.compose_subst ~unsafe:true env ~sigma:!evd subst full_subst in
@@ -784,7 +786,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
     let cuts_ctx = Context_map.specialize_rel_context !evd pats cuts_ctx in
     let pats = Context_map.lift_pats nb_cuts pats in
     let pats = pats_cuts @ pats in
-    let csubst = Context_map.mk_ctx_map env !evd (cuts_ctx @ args @ ctx') pats (subst.Context_map.src_ctx) in
+    let csubst = Context_map.mk_ctx_map env !evd Context.Rel.(append cuts_ctx (append args ctx')) pats (subst.Context_map.src_ctx) in
       Context_map.compose_subst ~unsafe:true env ~sigma:!evd csubst full_subst
   ) branches_info in
   let branches_nb = Array.map (fun summary ->
@@ -842,11 +844,11 @@ let curry_concl env sigma na dom codom =
       (term :: terms, acc)
   in
   let terms, acc =
-    match ctx with
-    | hd :: (_ :: _ as tl) ->
-       proj true hd (List.fold_right (proj false) tl ([], mkRel 1))
-    | hd :: tl -> ([mkRel 1], mkRel 1)
-    | [] -> ([mkRel 1], mkRel 1)
+    match Context.Rel.uncons ctx with
+    | Some (hd, tl) when not (Context.Rel.is_empty tl) ->
+       proj true hd (Context.Rel.fold_outside (proj false) tl ~init:([], mkRel 1))
+    | Some (hd,tl) -> ([mkRel 1], mkRel 1)
+    | None -> ([mkRel 1], mkRel 1)
   in
   let sigma, ev = new_evar env sigma newconcl in
   let term = mkLambda (na, dom, mkApp (ev, CArray.rev_of_list terms)) in
