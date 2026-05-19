@@ -119,7 +119,7 @@ val split_tele :
   rel_context ->
   rel_context * rel_declaration *
     rel_context
-val rels_above : 'a list -> int -> Int.Set.t
+val rels_above : rel_context -> int -> Int.Set.t
 val is_fix_proto : Environ.env -> Evd.evar_map -> constr -> bool
 val fix_rels : Environ.env -> Evd.evar_map -> rel_context -> Int.Set.t
 val dependencies_of_rel :

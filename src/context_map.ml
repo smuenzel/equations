@@ -138,21 +138,22 @@ let context_map_to_lhs ?(avoid = Id.Set.empty) ?loc map =
   let avoid = ref avoid in
   List.rev (pats_to_lhs ~avoid ?loc map.src_ctx map.map_inst)
 
-let do_renamings env sigma ctx =
+let do_renamings env sigma (ctx : rel_context) =
   let avoid, ctx' =
-    List.fold_right (fun decl (ids, acc) ->
-        let (n, b, t) = to_tuple decl in
-        match n.binder_name with
-        | Name id ->
-          let id' = Namegen.next_ident_away id ids in
-          let decl' = make_def {n with binder_name = Name id'} b t in
-          (Id.Set.add id' ids, Context.Rel.add decl' acc)
-        | Anonymous ->
-          let id' = Namegen.id_of_name_using_hdchar (push_rel_context acc env) sigma t Anonymous in
-          let id' = Namegen.next_ident_away id' ids in
-          let decl' = make_def {n with binder_name = Name id'} b t in
-          (Id.Set.add id' ids, Context.Rel.add decl' acc))
-      ctx (Id.Set.empty, Context.Rel.empty)
+    Context.Rel.fold_outside
+      (fun decl (ids, acc) ->
+         let (n, b, t) = to_tuple decl in
+         match n.binder_name with
+         | Name id ->
+           let id' = Namegen.next_ident_away id ids in
+           let decl' = make_def {n with binder_name = Name id'} b t in
+           (Id.Set.add id' ids, Context.Rel.add decl' acc)
+         | Anonymous ->
+           let id' = Namegen.id_of_name_using_hdchar (push_rel_context acc env) sigma t Anonymous in
+           let id' = Namegen.next_ident_away id' ids in
+           let decl' = make_def {n with binder_name = Name id'} b t in
+           (Id.Set.add id' ids, Context.Rel.add decl' acc))
+      ctx ~init:(Id.Set.empty, Context.Rel.empty)
   in ctx'
 
 (** Pretty-printing *)
@@ -274,10 +275,10 @@ let subst_pats_constr sigma k s c =
   in aux k c
 
 let subst_context sigma s ctx =
-  let (_, ctx') = fold_right
+  let (_, ctx') = Context.Rel.fold_outside
       (fun decl (k, ctx') ->
-         (succ k, map_rel_declaration (subst_pats_constr sigma k s) decl :: ctx'))
-      ctx (0, [])
+         (succ k, Context.Rel.add (map_rel_declaration (subst_pats_constr sigma k s) decl) ctx'))
+      ctx ~init:(0, Context.Rel.empty)
   in ctx'
 
 let rec specialize sigma s p =
@@ -296,11 +297,11 @@ and specialize_constr sigma s c = subst_pats_constr sigma 0 s c
 and specialize_pats sigma s = List.map (specialize sigma s)
 
 let specialize_rel_context sigma s ctx =
-  let subst, res = List.fold_right
+  let subst, res = Context.Rel.fold_outside
       (fun decl (k, acc) ->
          let decl = map_rel_declaration (subst_pats_constr sigma k s) decl in
-         (succ k, decl :: acc))
-      ctx (0, [])
+         (succ k, Context.Rel.add decl acc))
+      ctx ~init:(0, Context.Rel.empty)
   in res
 
 let mapping_constr sigma (s : context_map) c = specialize_constr sigma s.map_inst c
@@ -447,11 +448,9 @@ let intset_of_list =
 
 let split_context n c =
   let after, before = Context.Rel.chop n c in
-  try
-    Context.Rel.nth before 0
-  , Context.Rel.skipn 1 before
-  with
-  | Failure _ | Invalid_argument _ -> raise (Invalid_argument "split_context")
+  match Context.Rel.uncons before with
+  | Some (hd, tl) -> after, hd, tl
+  | None -> raise (Invalid_argument "split_context")
 
 let split_tele n (ctx : rel_context) =
   let rec aux after n l =
@@ -478,10 +477,11 @@ let is_fix_proto env sigma t =
   | LetIn (_, f, _, _) -> is_global env sigma (Lazy.force coq_fix_proto) f
   | _ -> false
 
-let fix_rels env sigma ctx =
-  List.fold_left_i (fun i acc decl ->
+let fix_rels env sigma (ctx : rel_context) =
+  Context.Rel.fold_inside_i
+    (fun i acc decl ->
       if is_fix_proto env sigma (get_type decl) then Int.Set.add i acc else acc)
-    1 Int.Set.empty ctx
+    1 ~init:Int.Set.empty ctx
 
 let rec dependencies_of_rel ~with_red env evd ctx k x =
   let (n,b,t) = to_tuple (Context.Rel.nth ctx (pred k)) in
@@ -507,12 +507,12 @@ let non_dependent evd ctx c =
 
 let subst_term_in_context sigma t ctx =
   let (term, rel, newctx) =
-    List.fold_right
+    Context.Rel.fold_outside
       (fun decl (term, rel, newctx) ->
          let (n, b, t) = to_tuple decl in
          let decl' = make_def n b (Termops.replace_term sigma term (mkRel rel) t) in
-         (lift 1 term, succ rel, decl' :: newctx))
-      ctx (t, 1, [])
+         (lift 1 term, succ rel, Context.Rel.add decl' newctx))
+      ctx ~init:(t, 1, Context.Rel.empty)
   in newctx
 
 let strengthen ?(full=true) ?(abstract=false) env evd (ctx : rel_context) x (t : constr) =
@@ -529,30 +529,31 @@ let strengthen ?(full=true) ?(abstract=false) env evd (ctx : rel_context) x (t :
       nf_betadeltaiota env evd t
     else t
   in
-  let ctx = List.map_i (fun k decl ->
+  let ctx = Context.Rel.map_decl_i (fun k decl ->
       if Int.Set.mem k rels && k < x then
         map_rel_declaration (maybe_reduce (x - k)) decl
       else decl) 1 ctx in
-  let len = length ctx in
+  let len = Context.Rel.length ctx in
   let nbdeps = Int.Set.cardinal rels in
   let lifting = len - nbdeps in (* Number of variables not linked to t *)
-  let rec aux k n acc m rest s = function
-    | decl :: ctx' ->
+  let rec aux k n acc m rest s ctx =
+    match Context.Rel.uncons ctx with
+    | Some (decl, ctx') ->
       if Int.Set.mem k rels then
         let rest' = subst_telescope (mkRel (nbdeps + lifting - pred m)) rest in
-        aux (succ k) (succ n) (decl :: acc) m rest' (Inl n :: s) ctx'
-      else aux (succ k) n (subst_telescope mkProp acc) (succ m) (decl :: rest) (Inr m :: s) ctx'
-    | [] -> rev acc, rev rest, s
+        aux (succ k) (succ n) (Context.Rel.add decl acc) m rest' (Inl n :: s) ctx'
+      else aux (succ k) n (subst_telescope mkProp acc) (succ m) (Context.Rel.add decl rest) (Inr m :: s) ctx'
+    | None -> Context.Rel.rev acc, Context.Rel.rev rest, s
   in
-  let (min, rest, subst) = aux 1 1 [] 1 [] [] ctx in
-  let lenrest = length rest in
+  let (min, rest, subst) = aux 1 1 Context.Rel.empty 1 Context.Rel.empty [] ctx in
+  let lenrest = Context.Rel.length rest in
   let subst = rev subst in
   let reorder = List.map_i (fun i -> function Inl x -> (x + lenrest, i) | Inr x -> (x, i)) 1 subst in
   let subst = List.map (function Inl x -> PRel (x + lenrest) | Inr x -> PRel x) subst in
   let ctx' =
     if abstract then
-      subst_term_in_context evd (lift (-lenrest) (specialize_constr evd subst t)) rest @ min
-    else rest @ min
+      subst_term_in_context evd (lift (-lenrest) (specialize_constr evd subst t)) (Context.Rel.append rest min)
+    else Context.Rel.append rest min
   in
   mk_ctx_map env evd ctx' subst ctx, 
   mk_ctx_map env evd ctx (List.map (fun (i, j) -> PRel i) reorder) ctx'
@@ -574,7 +575,7 @@ let new_strengthen (env : Environ.env) (evd : Evd.evar_map) (ctx : rel_context)
   in
   (* We may have to normalize some declarations in the context if they
    * mention [x] syntactically when they shouldn't. *)
-  let ctx = CList.map_i (fun k decl ->
+  let ctx = Context.Rel.map_decl_i (fun k decl ->
       if Int.Set.mem k rels && k < x then
         Equations_common.map_rel_declaration (maybe_reduce (x - k)) decl
       else decl) 1 ctx in
@@ -587,8 +588,9 @@ let new_strengthen (env : Environ.env) (evd : Evd.evar_map) (ctx : rel_context)
    * [n] is the position of the next rel that should be in the newer part of [ctx'].
    * [lifting] is the number of rels that will end in this newer part.
    * [before] and [after] are the older and newer parts of [ctx']. *)
-  let rec aux k before after n subst = function
-    | decl :: ctx ->
+  let rec aux k before after n subst ctx =
+    match Context.Rel.uncons ctx with
+    | Some (decl, ctx) ->
       (* We just lift the declaration so that it is typed under the whole
        * context [ctx]. We will perform the proper substitution right after. *)
       let decl = Equations_common.map_rel_declaration (Vars.lift k) decl in
@@ -597,24 +599,24 @@ let new_strengthen (env : Environ.env) (evd : Evd.evar_map) (ctx : rel_context)
          * is shifted by [lifting]. *)
         let subst = PRel (lifting + k - n + 1) :: subst in
         rev_subst.(k + lifting - n) <- PRel k;
-        aux (succ k) (decl :: before) after n subst ctx
+        aux (succ k) (Context.Rel.add decl before) after n subst ctx
       else
         let subst = PRel n :: subst in
         rev_subst.(n - 1) <- PRel k;
-        aux (succ k) before (decl :: after) (succ n) subst ctx
-    | [] -> CList.rev (before @ after), CList.rev subst
+        aux (succ k) before (Context.Rel.add decl after) (succ n) subst ctx
+    | None -> Context.Rel.(rev (append before after)), CList.rev subst
   in
   (* Now [subst] is a list of indices which represents the substitution
    * that we must apply. *)
   (* Right now, [ctx'] is an ill-typed rel_context, we need to apply [subst]. *)
-  let (ctx', subst) = aux 1 [] [] 1 [] ctx in
+  let (ctx', subst) = aux 1 Context.Rel.empty Context.Rel.empty 1 [] ctx in
   let rev_subst = Array.to_list rev_subst in
   (* Fix the context [ctx'] by using [subst]. *)
   (* Currently, each declaration in [ctx'] is actually typed under [ctx]. *)
   (* We can apply the substitution to get a declaration typed under [ctx'],
    * and lift it back to its place in [ctx']. *)
   let do_subst k c = Vars.lift (-k) (specialize_constr evd subst c) in
-  let ctx' = CList.map_i (fun k decl ->
+  let ctx' = Context.Rel.map_decl_i (fun k decl ->
       Equations_common.map_rel_declaration (do_subst k) decl) 1 ctx' in
   (* Now we have everything need to build the two substitutions. *)
   let s = mk_ctx_map env evd ctx' subst ctx in
@@ -644,7 +646,7 @@ let eq_context_nolet env sigma (g : rel_context) (d : rel_context) =
                  (* (Pp.string_of_ppcmds (UGraph.pr_universes Univ.Level.pr (Evd.universes sigma))); *)
                  (Pp.string_of_ppcmds (Termops.pr_evar_map ~with_univs:true None env sigma));
              (push_rel decl env, res)
-           else env, acc) g d (env, true))
+           else env, acc) (Context.Rel.to_list g) (Context.Rel.to_list d) (env, true))
   with Invalid_argument _ (* "List.fold_right2" *) -> false
      | e ->
        Printf.eprintf
@@ -672,10 +674,10 @@ let compose_subst ?(unsafe = false) env ?(sigma=Evd.empty) snd fst =
 let push_mapping_context sigma decl subs =
   let { src_ctx = g; map_inst = p; tgt_ctx = d } = subs in
   let decl' = map_rel_declaration (specialize_constr sigma p) decl in
-  { src_ctx = decl' :: g; map_inst = (PRel 1 :: List.map (lift_pat 1) p); tgt_ctx = decl :: d }
+  { src_ctx = Context.Rel.add decl' g; map_inst = (PRel 1 :: List.map (lift_pat 1) p); tgt_ctx = Context.Rel.add decl d }
 
 let lift_subst env evd (ctx : context_map) (g : rel_context) =
-  let map = List.fold_right (fun decl acc -> push_mapping_context evd decl acc) g ctx in
+  let map = Context.Rel.fold_outside (fun decl acc -> push_mapping_context evd decl acc) g ~init:ctx in
   check_ctx_map env evd map
 
 let single_subst ?(unsafe = false) env evd x p g =
@@ -685,7 +687,7 @@ let single_subst ?(unsafe = false) env evd x p g =
   else if noccur_between evd 1 x t then
     (* The term to substitute refers only to previous variables. *)
     let substctx = subst_in_ctx x t g in
-    let pats = CList.init (List.length g)
+    let pats = CList.init (Context.Rel.length g)
         (fun i -> let k = succ i in
           if k == x then (lift_pat (-1) p)
           else if k > x then PRel (pred k)
@@ -710,7 +712,7 @@ let pr_rel_name env i =
   Name.print (get_name (EConstr. lookup_rel i env))
 
 let is_local_def i ctx =
-  let decl = List.nth ctx (pred i) in
+  let decl = Context.Rel.nth ctx (pred i) in
   Context.Rel.Declaration.is_local_def decl
 
 let filter_def_pats map =
