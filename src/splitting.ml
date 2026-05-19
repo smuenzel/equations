@@ -390,7 +390,7 @@ let compute_possible_guardness_evidences sigma n fixbody fixtype =
          fixpoints ?) *)
     let m = Termops.nb_prod sigma fixtype in
     let ctx = fst (decompose_prod_n_decls sigma m fixtype) in
-    List.map_i (fun i _ -> i) 0 ctx
+    Context.Rel.to_list_map_i (fun i _ -> i) 0 ctx
 
 let eval_mfix = function
 | MutFix (progs, indexes, decl) ->
@@ -415,7 +415,7 @@ let define_mutual_nested env evd get_prog progs =
   let mutualapp, nestedbodies =
     let nested = List.length progs - List.length mutual in
     let one_nested before p prog afterctx idx =
-      let signlen = List.length p.program_sign in
+      let signlen = Context.Rel.length p.program_sign in
       let fixbody =
         Vars.lift 1 (* lift over itself *)
           (mkApp (get_prog prog, rel_vect (signlen + (nested - 1)) (List.length mutual)))
@@ -442,11 +442,11 @@ let define_mutual_nested env evd get_prog progs =
       let fixbody = applist (Vars.lift after fixbody, afterargs) in
       (* Apply to its arguments *)
       let fixbody = mkApp (fixbody, extended_rel_vect after p.program_sign) in
-      let fixbody = it_mkLambda_or_LetIn fixbody afterctx in
+      let fixbody = it_mkLambda_or_LetIn fixbody (Context.Rel.of_list afterctx) in
       let fixbody = it_mkLambda_or_LetIn fixbody p.program_sign in
       it_mkLambda_or_LetIn
         (mkFix (fixb, (fixna, fixty, Array.make 1 fixbody)))
-        (List.init (nested - 1) (fun _ -> (Context.Rel.Declaration.LocalAssum (anonR, mkProp))))
+        (Context.Rel.init (nested - 1) (fun _ -> (LocalAssum (anonR, mkProp))))
     in
     let rec fixsubst i k acc l =
       match l with
@@ -456,7 +456,7 @@ let define_mutual_nested env evd get_prog progs =
            let idx =
              match idx with
              | Some (idx, _) -> idx
-             | None -> pred (List.length p'.program_sign)
+             | None -> pred (Context.Rel.length p'.program_sign)
            in
            let rest_tys = List.map (fun (p,_) -> Syntax.program_type p) rest in
            let term = one_nested k p' prog' rest_tys idx in
@@ -486,7 +486,7 @@ let define_mutual_nested env evd get_prog progs =
       let sign = p.program_sign in
       let body = beta_appvect !evd (get_prog prog)
           (Array.append (Array.of_list mutualapp) (Array.of_list nestedbodies)) in
-      let body = beta_appvect !evd (Vars.lift (List.length sign) body) (extended_rel_vect 0 sign) in
+      let body = beta_appvect !evd (Vars.lift (Context.Rel.length sign) body) (extended_rel_vect 0 sign) in
       let body = it_mkLambda_or_LetIn body (lift_rel_context 1 sign) in
       na, ty, body
     in
@@ -535,7 +535,7 @@ let term_of_tree env0 isevar sort tree =
       let compile_where ({where_program; where_type} as w)
           (env, evm, ctx) =
         let evm, c', ty' = evm, where_term w, where_type in
-        (env, evm, (make_def (nameR (where_id w)) (Some c') ty' :: ctx))
+        (env, evm, Context.Rel.add (make_def (nameR (where_id w)) (Some c') ty') ctx)
       in
       let env, evm, ctx = List.fold_right compile_where where (env, evm,ctx) in
       let body = it_mkLambda_or_LetIn rhs ctx and typ = it_mkProd_or_subst env evm ty ctx in
@@ -593,7 +593,7 @@ let term_of_tree env0 isevar sort tree =
         (* We get the context from the constructor arity. *)
         let new_ctx, ty = EConstr.decompose_prod_n_decls !isevar nb ty in
         let new_ctx = Namegen.name_context env !isevar new_ctx in
-        let envnew = push_rel_context (new_ctx @ ctx') env in
+        let envnew = push_rel_context (Context.Rel.append new_ctx ctx') env in
         (* Remove the cuts and append them to the context. *)
         let cut_ctx, ty = Equations_common.splay_prod_n_assum envnew !isevar nb_cuts ty in
         let ty =
@@ -606,7 +606,7 @@ let term_of_tree env0 isevar sort tree =
            * a sanity-check. *)
         if !Equations_common.debug then begin
           let open Feedback in
-          let ctx = cut_ctx @ new_ctx @ ctx' in
+          let ctx = Context.Rel.(append cut_ctx (append new_ctx ctx')) in
           msg_debug(str"Simplifying term:");
           msg_debug(let env = push_rel_context ctx env in
                    Printer.pr_econstr_env env !evd ty);
@@ -616,15 +616,15 @@ let term_of_tree env0 isevar sort tree =
           msg_debug(Printer.pr_named_context env !evd (EConstr.Unsafe.to_named_context (named_context env)));
         end;
         let _ =
-          let env = push_rel_context (cut_ctx @ new_ctx @ ctx') env in
+          let env = push_rel_context Context.Rel.(append cut_ctx (append new_ctx ctx')) env in
           evd_comb0 (fun sigma -> Typing.type_of env sigma ty) evd
         in
-        let ((hole, c), _, lsubst) = Simplify.apply_simplification_fun simpl_step env evd (cut_ctx @ new_ctx @ ctx', ty, sort) in
+        let ((hole, c), _, lsubst) = Simplify.apply_simplification_fun simpl_step env evd (Context.Rel.(append cut_ctx (append new_ctx ctx')), ty, sort) in
         if !debug then
           begin
             let open Feedback in
             msg_debug (str"Finished simplifying");
-            msg_debug(let ctx = cut_ctx @ new_ctx @ ctx' in
+            msg_debug(let ctx = Context.Rel.(append cut_ctx (append new_ctx ctx')) in
                      let env = push_rel_context ctx env in
                      Printer.pr_econstr_env env !evd c);
           end;
@@ -655,7 +655,7 @@ let term_of_tree env0 isevar sort tree =
             let ev_ctx_constrs = List.map (fun decl ->
                 let id = Context.Named.Declaration.get_id decl in
                 EConstr.mkVar id) ev_ctx in
-            let rels, named = List.chop (List.length next_ctx) ev_ctx_constrs in
+            let rels, named = List.chop (Context.Rel.length next_ctx) ev_ctx_constrs in
             let vars_subst = List.map2 (fun decl c ->
                 let id = Context.Named.Declaration.get_id decl in
                 id, c) (Environ.named_context env) named in
@@ -670,7 +670,7 @@ let term_of_tree env0 isevar sort tree =
           (* This should not happen... *)
           | _ -> failwith "Should not fail here, please report."
         in
-        EConstr.it_mkLambda_or_LetIn c (cut_ctx @ new_ctx)
+        EConstr.it_mkLambda_or_LetIn c Context.Rel.(append cut_ctx new_ctx)
         ) branches_res sp in
 
       (* Get back to the original context. *)
@@ -753,11 +753,11 @@ let make_program env evd p prob s rec_info =
        let args = extended_rel_vect 0 r.rec_lets in
        let term = beta_appvect !evd term args in
        let before, after =
-         CList.chop r.rec_args r.rec_sign
+         Context.Rel.chop r.rec_args r.rec_sign
        in
        let fixdecls, after =
-         CList.chop sr.struct_rec_protos after in
-       let subst = List.append (List.map (fun _ -> mkProp) fixdecls) (List.rev (Array.to_list args)) in
+         Context.Rel.chop sr.struct_rec_protos after in
+       let subst = List.append (Context.Rel.to_list_map (fun _ -> mkProp) fixdecls) (List.rev (Array.to_list args)) in
        let program_sign = subst_rel_context 0 subst before in
        let program_arity = substnl subst r.rec_args r.rec_arity in
        let p' = { p with program_sign; program_arity } in
@@ -769,7 +769,7 @@ let make_program env evd p prob s rec_info =
              | NestedOn None ->
                (match s with
                 | Split (ctx, var, _, _) ->
-                  NestedOn (Some ((List.length (ctx.Context_map.src_ctx)) - var - sr.struct_rec_protos, None))
+                  NestedOn (Some ((Context.Rel.length (ctx.Context_map.src_ctx)) - var - sr.struct_rec_protos, None))
                 | _ -> ann)
              | _ -> ann
            in
@@ -852,7 +852,7 @@ let make_programs env evd flags ?(define_constants=false) programs =
       let term = it_mkLambda_or_LetIn b after in
       let term = nf_beta env !evd term in
       let rec_info = update_rec_info p rec_info in
-      let p = { p with program_sign = p.program_sign @ after } in
+      let p = { p with program_sign = Context.Rel.append p.program_sign after } in
       { program_info = p;
         program_prob = prob;
         program_rec = Some rec_info;
@@ -871,7 +871,7 @@ let make_single_program env evd flags p prob s rec_info =
 let change_lhs s subs =
   let open Context.Rel.Declaration in
   let l' =
-    List.map
+    Context.Rel.map_decl_smart
       (function LocalDef ({binder_name=Name id}, b, t) as decl ->
          (try let b' = List.assoc id s in LocalDef (make_annot (Name id) (get_relevance decl), b', t)
           with Not_found -> decl)
@@ -929,23 +929,23 @@ let check_splitting env evd sp =
       let () = check_term ctx (applist (w.where_program.program_term, w.where_program_args)) w.where_type in
       let () = assert(w.where_context_length = Context.Rel.length ctx) in
       let def = make_def (nameR (where_id w)) (Some (where_term w)) w.where_type in
-      def :: ctx
+      Context.Rel.add def ctx
     in
     let ctx = List.fold_left check_where (lhs.Context_map.src_ctx) wheres in
     ctx
   and check_program p =
     let ty = program_type p in
-    let () = check_type [] ty in
+    let () = check_type Context.Rel.empty ty in
     let _ = check_ctx_map env evd p.program_prob in
     let _ =
       match p.program_rec with
       | None -> []
       | Some r ->
         let ty = it_mkLambda_or_LetIn r.rec_arity r.rec_sign in
-        let () = check_type [] ty in
+        let () = check_type Context.Rel.empty ty in
         match r.rec_node with
         | WfRec wf ->
-          let () = check_type [] wf.wf_rec_term in
+          let () = check_type Context.Rel.empty wf.wf_rec_term in
           []
         | StructRec s -> []
     in
@@ -1124,7 +1124,7 @@ let solve_equations_obligations ~pm (flags : Equations_common.flags) recids loc 
     (* Force introductions to be able to shrink the bodies later on. *)
     List.map
       (fun (env, ev, evi, ctx, _) ->
-         Tacticals.tclDO (Context.Rel.length ctx) Tactics.intro)
+         Tacticals.tclDO (Context.Named.length ctx) Tactics.intro)
       types
   in
   (* Feedback.msg_debug (str"Starting proof"); *)
@@ -1204,7 +1204,7 @@ let solve_equations_obligations_program ~pm (flags : flags) recids loc i sigma h
       let ctx = Evd.evar_filtered_context evi in
       let tac = 
         Tacticals.tclTHEN 
-          (Tacticals.tclDO (Context.Rel.length ctx - nc_len) Tactics.intro)
+          (Tacticals.tclDO (Context.Named.length ctx - nc_len) Tactics.intro)
           flags.tactic
       in
       (id, ty, src, status, deps, Some tac))
