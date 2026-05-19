@@ -534,7 +534,7 @@ let smart_case (env : Environ.env) (evd : Evd.evar_map ref)
   let indices = indices @ [rel_t] in
   let indfam = Inductiveops.make_ind_family (pind, params) in
   let arity_ctx = Inductiveops.make_arity_signature env !evd true indfam in
-  let rev_arity_ctx = List.rev arity_ctx in
+  let rev_arity_ctx = Context.Rel.rev arity_ctx in
 
   (* Firstly, we need to analyze each index to decide if we should introduce
    * an equality for it or not. *)

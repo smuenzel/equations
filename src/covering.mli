@@ -166,7 +166,7 @@ val env_of_rhs :
            rel_context ->
            Environ.env ->
            (Names.Id.t * pat) list ->
-           rel_declaration list ->
+           rel_context ->
            rel_context *
            Environ.env * int * constr list
 
@@ -234,7 +234,7 @@ val compute_rec_data :
   Environ.env ->
   Evd.evar_map ref ->
   int_data ->
-  Equations_common.rel_declaration list ->
+  Equations_common.rel_context ->
   EConstr.Vars.substl ->
   Syntax.program_info ->
   Syntax.program_info * Context_map.context_map * EConstr.constr *

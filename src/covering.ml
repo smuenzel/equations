@@ -110,13 +110,13 @@ and unify_constrs env evd flex g l l' =
 
 let flexible pats gamma =
   let rec aux (k,flex) pats decls = 
-    match decls, pats with
-    | Context.Rel.Declaration.LocalAssum _ :: decls, pat :: pats ->
+    match Context.Rel.uncons decls, pats with
+    | Some (Context.Rel.Declaration.LocalAssum _, decls), pat :: pats ->
         (match pat with
         | PInac _ -> aux (succ k, Int.Set.add k flex) pats decls
         | p -> aux (succ k, flex) pats decls)
-    | _ :: decls,  pats -> aux (succ k, flex) pats decls
-    | [], [] -> flex
+    | Some (_, decls),  pats -> aux (succ k, flex) pats decls
+    | None, [] -> flex
     | _ -> assert false
   in aux (1, Int.Set.empty) pats gamma
 
@@ -211,9 +211,9 @@ let matches_user env subst (p : user_pats) =
   with Conflict -> UnifFailure | Stuck -> UnifStuck
 
 let refine_arg idx ctx =
-  let before, after = List.chop idx ctx in
-  let lenafter = List.length after in
-  let lets_in_ctx = List.count (fun x -> Context.Rel.Declaration.is_local_def x) after in
+  let before, after = Context.Rel.chop idx ctx in
+  let lenafter = Context.Rel.length after in
+  let lets_in_ctx = Context.Rel.count (fun x -> Context.Rel.Declaration.is_local_def x) after in
   lenafter, lenafter - lets_in_ctx
 
 let adjust_sign_arity env evars p clauses =
@@ -232,12 +232,12 @@ let adjust_sign_arity env evars p clauses =
       | 0 -> evars, sign, ty
       | n ->
         match EConstr.kind evars (whd_all (push_rel_context sign env) evars ty) with
-        | Prod (na, t, b) -> aux evars (n - 1) (Context.Rel.Declaration.LocalAssum (na, t) :: sign) b
+        | Prod (na, t, b) -> aux evars (n - 1) Context.Rel.(add (LocalAssum (na, t)) sign) b
         | Evar e -> let evars', t = Evardefine.define_evar_as_product env evars e in
           aux evars' args sign t
         | _ ->
           user_err_loc (None, str "Too many patterns in clauses for this type")
-    in aux evars max_args [] fullty
+    in aux evars max_args Context.Rel.empty fullty
   in
   let check_clause (Pre_clause (loc, lhs, rhs)) =
     if List.length lhs < max_args then user_err_loc (loc, str "This clause has not enough arguments")
@@ -247,7 +247,7 @@ let adjust_sign_arity env evars p clauses =
   let p = { p with program_sign = sign; program_arity = ty } in
   evars, p
 
-let lets_of_ctx env ctx evars s =
+let lets_of_ctx env (ctx : rel_context) evars s =
   let envctx = push_rel_context ctx env in
   let ctxs, pats, varsubst, len, ids = 
     fold_left (fun (ctx', cs, varsubst, k, ids) (id, pat) -> 
@@ -256,30 +256,30 @@ let lets_of_ctx env ctx evars s =
         | PRel i -> (ctx', cs, (i, id) :: varsubst, k, Id.Set.add id ids)
         | _ -> 
           let ty = e_type_of envctx evars c in
-          (make_def (nameR id) (Some (lift k c)) (lift k ty) :: ctx', (c :: cs),
+          (Context.Rel.add (make_def (nameR id) (Some (lift k c)) (lift k ty)) ctx', (c :: cs),
            varsubst, succ k, Id.Set.add id ids))
-      ([],[],[],0,Id.Set.empty) s
+      (Context.Rel.empty,[],[],0,Id.Set.empty) s
   in
-  let _, _, ctx' = List.fold_right (fun decl (ids, i, ctx') ->
+  let _, _, ctx' = Context.Rel.fold_outside (fun decl (ids, i, ctx') ->
       let (n, b, t) = to_tuple decl in
-      try ids, pred i, (make_def (nameR (List.assoc i varsubst)) b t :: ctx')
+      try ids, pred i, Context.Rel.add (make_def (nameR (List.assoc i varsubst)) b t) ctx'
       with Not_found -> 
         let id' = Namegen.next_name_away n.Context.binder_name ids in
-        Id.Set.add id' ids, pred i, (make_def (nameR id') b t :: ctx')) ctx (ids, Context.Rel.length ctx, [])
+        Id.Set.add id' ids, pred i, Context.Rel.add (make_def (nameR id') b t) ctx') ctx ~init:(ids, Context.Rel.length ctx, Context.Rel.empty)
   in pats, ctxs, ctx'
 
 let env_of_rhs evars ctx env s lets = 
   let envctx = push_rel_context ctx env in
   let patslets, letslen = 
-    fold_right (fun decl (acc, len) -> 
+    Context.Rel.fold_outside (fun decl (acc, len) -> 
         let (_, b, _) = to_tuple decl in
-        (lift (-len) (Option.get b) :: acc, succ len)) lets ([], 0) 
+        (lift (-len) (Option.get b) :: acc, succ len)) lets ~init:([], 0) 
   in
   let pats, ctx, len = 
-    let (pats, x, y) = lets_of_ctx env (lets @ ctx) evars 
+    let (pats, x, y) = lets_of_ctx env Context.Rel.(append lets ctx) evars 
         (List.map (fun (id, pat) -> id, lift_pat letslen pat) s) 
     in
-    pats, x @ y, List.length x 
+    pats, Context.Rel.append x y, Context.Rel.length x 
   in
   let pats = List.map (lift (-letslen)) pats @ patslets in
   ctx, envctx, len + letslen, pats
@@ -371,10 +371,10 @@ let interp_program_body env sigma ctx data body ty =
     let env = Environ.reset_with_named_context (Environ.named_context_val env) env in
     let env = push_rel_context ctx env in
     let subst =
-      List.fold_left_i (fun i subst decl ->
+      Context.Rel.fold_inside_i (fun i subst decl ->
           match get_name decl with
           | Name na -> (na, mkRel i) :: subst
-          | _ -> subst) 1 [] ctx
+          | _ -> subst) 1 ~init:[] ctx
     in
     let c = Vars.replace_vars sigma subst c in
     let sigma =
@@ -387,7 +387,7 @@ let interp_program_body env sigma ctx data body ty =
 let interp_program_body env evars ctx data c ty =
   let notations = List.map Metasyntax.prepare_where_notation data.notations in
   Metasyntax.with_syntax_protection (fun () ->
-    let ctx' = List.map EConstr.Unsafe.to_rel_decl ctx in
+    let ctx' = Context.Rel.map_decl EConstr.Unsafe.to_rel_decl ctx in
     List.iter (Metasyntax.set_notation_for_interpretation (Environ.push_rel_context ctx' env) data.intenv)
       notations;
     interp_program_body env evars ctx data c ty) ()
@@ -451,7 +451,7 @@ let unify_type env evars before id ty after =
           let ty = prod_applist !evars ty params in
           let ctx, ty = decompose_prod_decls !evars ty in
           let ctx = 
-            fold_right (fun decl acc ->
+            Context.Rel.fold_outside (fun decl acc ->
                 let open Context.Rel.Declaration in
                 let id = match get_name decl with
                 | Name id -> next_ident_away id
@@ -460,8 +460,8 @@ let unify_type env evars before id ty after =
                       (push_rel_context acc envb) !evars (get_type decl) Anonymous in
                   next_ident_away x
                 in
-                (set_name (Name id) decl :: acc))
-              ctx []
+                Context.Rel.(add (set_name (Name id) decl) acc))
+              ctx ~init:Context.Rel.empty
           in
           let env' = push_rel_context ctx env in
           let (indf, args) = find_rectype env' !evars ty in
@@ -476,8 +476,8 @@ let unify_type env evars before id ty after =
     in
     let unify vs = 
       Array.map (fun (env', ctxc, c, cpat, q, us) -> 
-          let _beforelen = length before and ctxclen = length ctxc in
-          let fullctx = ctxc @ before in
+          let _beforelen = Context.Rel.length before and ctxclen = Context.Rel.length ctxc in
+          let fullctx = Context.Rel.append ctxc before in
           try
             let vs' = List.map (lift ctxclen) vs in
             let p1 = lift_pats ctxclen (inaccs_of_constrs (rels_of_ctx ~with_lets:false before)) in
@@ -571,7 +571,7 @@ let split_var (env,evars) var delta =
       (* ctx' |- spat : before ; id *)
       let spat =
         let ctxcsubst, beforesubst = List.chop ctxlen s in
-        let map = { src_ctx = ctx'; map_inst = cpat :: beforesubst; tgt_ctx = decl :: before } in
+        let map = { src_ctx = ctx'; map_inst = cpat :: beforesubst; tgt_ctx = Context.Rel.add decl before } in
         check_ctx_map env !evars map
       in
       (* ctx' ; after |- safter : before ; id ; after = delta *)
@@ -584,7 +584,7 @@ let split_var (env,evars) var delta =
     if Array.exists (fun x -> x == UnifStuck) unify then
       Some (CannotSplit (id.binder_name, before, newty))
     else
-      let newdelta = after @ (make_def id b newty :: before) in
+      let newdelta = Context.Rel.append after (Context.Rel.add (make_def id b newty) before) in
       Some (Splitted (var, do_renamings env !evars newdelta, Array.map branch unify))
 
 let prove_empty env delta v =
@@ -598,7 +598,7 @@ let prove_empty env delta v =
 
 let find_empty env delta =
   let r = List.map_filter (fun v -> prove_empty env delta v)
-      (CList.init (List.length delta) succ)
+      (CList.init (Context.Rel.length delta) succ)
   in match r with x :: _ -> Some x | _ -> None
 
 (* The list of variables appearing in a list of patterns,
@@ -673,7 +673,7 @@ let pr_problem p env sigma { src_ctx = delta; map_inst = patcs }=
   let env' = push_rel_context delta env in
   let ctx = pr_context env sigma delta in
   Id.print p.program_id ++ str" " ++ pr_pats env' sigma patcs ++
-  (if List.is_empty delta then ctx else 
+  (if Context.Rel.is_empty delta then ctx else 
      fnl () ++ str "In context: " ++ fnl () ++ ctx)
 
 let rel_id ctx n = 
@@ -739,8 +739,10 @@ let compute_fixdecls_data env evd ?data programs =
   in
   let fixprots = List.map (fun ty -> make_fix_proto env !evd ty) tys in
   let fixdecls =
-    List.map2 (fun i (relevance, fixprot) -> of_tuple (make_annot (Name i) relevance, None, fixprot)) names fixprots in
-  data, List.rev fixdecls, fixprots
+    List.map2 (fun i (relevance, fixprot) -> of_tuple (make_annot (Name i) relevance, None, fixprot)) names fixprots
+    |> Context.Rel.of_list
+  in
+  data, Context.Rel.rev fixdecls, fixprots
 
 let interp_arity env evd ~poly ~is_rec ~with_evars notations (((loc,i),udecl,rec_annot,l,t,by),clauses as ieqs) =
   let ienv, ((env', sign), impls, _locs) = Equations_common.evd_comb1 (interp_context_evars env) evd l in
@@ -774,7 +776,7 @@ let interp_arity env evd ~poly ~is_rec ~with_evars notations (((loc,i),udecl,rec
        | Some lid ->
          (try
             let k, _, _ = lookup_rel_id (snd lid) sign in
-            Some (Structural (interp_reca rec_annot (Some (List.length sign - k, Some lid))))
+            Some (Structural (interp_reca rec_annot (Some (Context.Rel.length sign - k, Some lid))))
           with Not_found ->
             user_err_loc (fst lid,
                           Pp.(str"No argument named " ++ Id.print (snd lid) ++ str" found")))
@@ -839,13 +841,13 @@ let recursive_patterns env progid rec_info =
 let destPRel = function PRel i -> i | _ -> assert false
 
 let pats_of_sign sign =
-  List.rev_map (fun decl ->
+  Context.Rel.to_list_rev_map (fun decl ->
       DAst.make (PUVar (Name.get_id (Context.Rel.Declaration.get_name decl), Implicit))) sign
 
 let abstract_term_in_context env evars idx t map =
-  let before, after = CList.chop (pred idx) map.src_ctx in
+  let before, after = Context.Rel.chop (pred idx) map.src_ctx in
   let before' = subst_term_in_context evars (lift (- pred idx) t) before in
-  { src_ctx = before' @ after; map_inst = map.map_inst; tgt_ctx = map.tgt_ctx }
+  { src_ctx = Context.Rel.append before' after; map_inst = map.map_inst; tgt_ctx = map.tgt_ctx }
 
 let wf_fix_constr env evars sign arity sort carrier cterm crel =
   let sigma, tele, telety = Sigma_types.telescope_of_context env !evars sign in
@@ -933,8 +935,8 @@ let wf_fix env evars subst sign arity sort term rel =
     let r = Retyping.relevance_of_term envsign sigma cterm in
     let ty = Retyping.get_type_of envsign sigma cterm in
     let ty = nf_all envsign sigma ty in
-    if noccur_between sigma 1 (length sign) ty then
-      make_annot Anonymous r, lift (- length sign) ty
+    if noccur_between sigma 1 (Context.Rel.length sign) ty then
+      make_annot Anonymous r, lift (- Context.Rel.length sign) ty
     else
       user_err_loc (Constrexpr_ops.constr_loc term,
                     str"The carrier type of the recursion order cannot depend on the arguments")
@@ -964,17 +966,18 @@ let compute_rec_data env evars data lets subst p =
           List.filter (fun decl ->
               let na = Context.Rel.Declaration.get_name decl in
               let id = Nameops.Name.get_id na in
-              not (Id.equal id p.program_id)) data.fixdecls
+              not (Id.equal id p.program_id)) (Context.Rel.to_list data.fixdecls)
+          |> Context.Rel.of_list
         in
-        let len = length fixdecls in
-        len, lift_rel_context len p.program_sign @ fixdecls
+        let len = Context.Rel.length fixdecls in
+        len, lift_rel_context len (Context.Rel.append p.program_sign fixdecls)
       | _ ->
-        let len = length data.fixdecls in
-        len, lift_rel_context len p.program_sign @ data.fixdecls
+        let len = Context.Rel.length data.fixdecls in
+        len, lift_rel_context len (Context.Rel.append p.program_sign data.fixdecls)
     in
     let extpats = recursive_patterns env p.program_id data.rec_type in
     let sign, ctxpats =
-      let sign = sign @ lets in
+      let sign = Context.Rel.append sign lets in
       let extpats' = pats_of_sign lets in
       sign, extpats' @ extpats
     in
@@ -988,8 +991,8 @@ let compute_rec_data env evars data lets subst p =
       { rec_sign = sign;
         rec_lets = lets;
         rec_prob = id_subst sign;
-        rec_arity = liftn reclen (succ (length p.program_sign)) p.program_arity;
-        rec_args = List.length p.program_sign;
+        rec_arity = liftn reclen (succ (Context.Rel.length p.program_sign)) p.program_arity;
+        rec_args = Context.Rel.length p.program_sign;
         rec_node }
     in
     p, rec_info.rec_prob, rec_info.rec_arity, ctxpats, (Some rec_info)
@@ -998,10 +1001,10 @@ let compute_rec_data env evars data lets subst p =
     let arg, rel, (functional_type, _full_functional_type, fix) =
       wf_fix env evars subst p.program_sign p.program_arity p.program_sort term rel in
     let ctxpats = pats_of_sign lets in
-    let rec_args = List.length p.program_sign in
+    let rec_args = Context.Rel.length p.program_sign in
     let decl = make_def (nameR p.program_id) None functional_type in
-    let rec_sign = p.program_sign @ lets in
-    let lhs = decl :: rec_sign in
+    let rec_sign = Context.Rel.append p.program_sign lets in
+    let lhs = Context.Rel.add decl rec_sign in
     let pats = PHide 1 :: lift_pats 1 (id_pats rec_sign) in
     let rec_prob = { src_ctx = lhs; map_inst = pats; tgt_ctx = lhs } in
     let rec_node =
@@ -1017,11 +1020,11 @@ let compute_rec_data env evars data lets subst p =
                      rec_args;
                      rec_node = WfRec rec_node }
     in
-    let p = { p with program_sign = p.program_sign @ lets } in
+    let p = { p with program_sign = Context.Rel.append p.program_sign lets } in
     p, rec_info.rec_prob, rec_info.rec_arity, ctxpats, Some rec_info
 
   | _ ->
-    let p = { p with program_sign = p.program_sign @ lets } in
+    let p = { p with program_sign = Context.Rel.append p.program_sign lets } in
     p, id_subst p.program_sign, p.program_arity, pats_of_sign lets, None
 
 exception UnfaithfulSplit of (Loc.t option * Pp.t)
@@ -1035,15 +1038,15 @@ let rename_domain env sigma bindings map =
       bindings Id.Set.empty
   in
   let ctx, avoid =
-    List.fold_right_map (fun decl avoid ->
+    Context.Rel.fold_outside_map (fun decl avoid ->
       let id = Namegen.next_name_away (get_name decl) avoid in
-      set_name (Name id) decl, Id.Set.add id avoid) ctx avoid in
+      set_name (Name id) decl, Id.Set.add id avoid) ctx ~init:avoid in
   let fn rel decl = 
     match Int.Map.find rel bindings with
     | exception Not_found -> decl
     | (id, _, gen) -> if gen != Generated then set_name (Name id) decl else decl
   in 
-  let rctx = CList.map_i fn 1 ctx in
+  let rctx = Context.Rel.map_decl_i fn 1 ctx in
   mk_ctx_map env sigma rctx p ctx'
 
 let rec eq_pat_mod_inacc env sigma p1 p2 =
@@ -1375,7 +1378,7 @@ and interp_clause env evars p data prev clauses' path prob
     let refterm (* in newctx *) = mapping_constr !evars revctx cconstr in
     let refty = mapping_constr !evars revctx cty in
     let decl = make_assum (nameR idref) refty in
-    let extnewctx = decl :: newctx in
+    let extnewctx = Context.Rel.add decl newctx in
     (* cmap : Δ -> ctx, cty,
        strinv associates to indexes in the strenghtened context to
        variables in the original context.
@@ -1389,9 +1392,9 @@ and interp_clause env evars p data prev clauses' path prob
     in
     (* equations_debug Pp.(fun () -> str"Moving refine variable decl to: " ++ int ty_min_fv); *)
     let tytop, tytopinv = 
-      let before, after = List.chop (pred ty_min_fv) newctx in
+      let before, after = Context.Rel.chop (pred ty_min_fv) newctx in
       let newdecl' = make_assum (nameR idref) (lift (- (pred ty_min_fv)) refty) in
-      let newctx = lift_rel_context 1 before @ newdecl' :: after in
+      let newctx = Context.Rel.append (lift_rel_context 1 before) (Context.Rel.add newdecl' after) in
       mk_ctx_map env !evars newctx 
         (PRel ty_min_fv :: List.rev (patvars_of_ctx before) @ List.rev (lift_pats ty_min_fv (patvars_of_ctx after)))
         extnewctx,
@@ -1510,17 +1513,17 @@ and interp_clause env evars p data prev clauses' path prob
     let strength_app = List.map_filter (fun t ->
         if isRel !evars t then
           let i = destRel !evars t in
-          let decl = List.nth prob.src_ctx (pred i) in
+          let decl = Context.Rel.nth prob.src_ctx (pred i) in
           if Context.Rel.Declaration.is_local_def decl then None
           else Some t
         else Some t) strength_app
     in
     let path' = path in
     let lets' =
-      let letslen = length lets in
+      let letslen = Context.Rel.length lets in
       let _, ctxs, _ = lets_of_ctx env ctx evars s in
-      let newlets = (lift_rel_context (succ letslen) ctxs)
-                    @ (lift_rel_context 1 lets)
+      let newlets = Context.Rel.append (lift_rel_context (succ letslen) ctxs)
+                    (lift_rel_context 1 lets)
       in specialize_rel_context !evars cmap.map_inst newlets
     in
     let clauses' = List.mapi (fun i x -> x, (succ i, 0)) cls' in
@@ -1569,7 +1572,7 @@ and interp_wheres env0 ctx evars path data s lets
     let rel, fixp = 
       if is_rec then make_fix_proto env !evars pre_type 
       else Retyping.relevance_of_type env !evars pre_type, pre_type in
-    let fixdecls = [Context.Rel.Declaration.LocalAssum (make_annot (Name id) rel, fixp)] in
+    let fixdecls = Context.Rel.of_list [LocalAssum (make_annot (Name id) rel, fixp)] in
     let rec_type = compute_rec_type data.rec_type [p] in
     let rec_data = {data with rec_type; fixdecls} in
     let p, problem, arity, extpats, rec_info =
@@ -1615,7 +1618,7 @@ and interp_wheres env0 ctx evars path data s lets
         Lazy.from_fun cover, term
     in
     let decl = make_def (nameR id) (Some (applistc term where_args)) pre_type in
-    (data, decl :: lets, succ nlets, program :: coverings,
+    (data, Context.Rel.add decl lets, succ nlets, program :: coverings,
      push_rel decl envctx)
   in
   let (data, lets, nlets, coverings, envctx') =
@@ -1626,7 +1629,7 @@ and covering ?(check_unused=true) env evars p data (clauses : pre_clause list)
     path prob extpats ty =
   let clauses = (List.mapi (fun i x -> (x,(succ i,0))) clauses) in
   (*TODO eta-expand clauses or type *)
-  match covering_aux env evars p data [] clauses path prob extpats [] ty with
+  match covering_aux env evars p data [] clauses path prob extpats Context.Rel.empty ty with
   | Some (clauses, cov) ->
     let () = if check_unused then check_unused_clauses env !evars clauses in
     cov
@@ -1640,7 +1643,7 @@ let program_covering env evd data p clauses =
     data.notations p ~avoid:Id.Set.empty) clauses in
   let sigma, p = adjust_sign_arity env !evd p clauses in
   let () = evd := sigma in
-  let p', prob, arity, extpats, rec_node = compute_rec_data env evd data [] [] p in
+  let p', prob, arity, extpats, rec_node = compute_rec_data env evd data Context.Rel.empty [] p in
   let splitting =
     covering env evd p data clauses [p.program_id] prob extpats arity
   in (p', prob, splitting, rec_node)

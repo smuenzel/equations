@@ -130,13 +130,13 @@ let depcase ~poly ((mind, i as ind), u) =
   let ctx = oneind.mind_arity_ctxt in
   let nparams = mindb.mind_nparams in
   let ctx = Context.Rel.map_decl of_rel_decl ctx in
-  let args, params = List.chop (List.length ctx - nparams) ctx in
-  let nargs = List.length args in
+  let args, params = Context.Rel.chop (Context.Rel.length ctx - nparams) ctx in
+  let nargs = Context.Rel.length args in
   let indapp = mkApp (mkIndU (ind,u), extended_rel_vect 0 ctx) in
   let evd = ref (Evd.from_env (Global.env())) in
   let s = evd_comb0 (Evd.new_sort_variable Evd.univ_flexible) evd in
   let pred = it_mkProd_or_LetIn (mkSort s)
-    (make_assum (indna Anonymous) indapp :: args)
+    Context.Rel.(add (make_assum (indna Anonymous) indapp) args)
   in
   let nconstrs = Array.length oneind.mind_nf_lc in
   let mkbody i (ctx, ty) =
