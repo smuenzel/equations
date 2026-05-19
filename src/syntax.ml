@@ -515,7 +515,7 @@ let interleave_implicits impls pats =
 let interp_eqn env sigma notations p ~avoid eqn =
   let whereid = ref (Nameops.add_suffix p.program_id "_abs_where") in
   let patnames =
-    List.rev_map (fun decl -> Context.Rel.Declaration.get_name decl) p.program_sign
+    Context.Rel.(to_list_rev_map Declaration.get_name p.program_sign)
   in
   let impls =
     List.map (fun a ->

@@ -129,7 +129,7 @@ let depcase ~poly ((mind, i as ind), u) =
   let indna x = make_annot x relevance in
   let ctx = oneind.mind_arity_ctxt in
   let nparams = mindb.mind_nparams in
-  let ctx = List.map of_rel_decl ctx in
+  let ctx = Context.Rel.map_decl of_rel_decl ctx in
   let args, params = List.chop (List.length ctx - nparams) ctx in
   let nargs = List.length args in
   let indapp = mkApp (mkIndU (ind,u), extended_rel_vect 0 ctx) in
@@ -141,7 +141,7 @@ let depcase ~poly ((mind, i as ind), u) =
   let nconstrs = Array.length oneind.mind_nf_lc in
   let mkbody i (ctx, ty) =
     let args = Context.Rel.instance mkRel 0 ctx in
-    annot_of_context (EConstr.of_rel_context ctx), mkApp (mkRel (1 + nconstrs + List.length ctx - i), args)
+    annot_of_context (EConstr.of_rel_context ctx), mkApp (mkRel (1 + nconstrs + Context.Rel.length ctx - i), args)
   in
   let bodies = Array.mapi mkbody oneind.mind_nf_lc in
   let branches =

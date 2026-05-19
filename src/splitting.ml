@@ -157,6 +157,7 @@ let where_id w = w.where_program.program_info.program_id
 let where_context wheres =
   List.map (fun ({where_program; where_type } as w) ->
              make_def (nameR (where_id w)) (Some (where_term w)) where_type) wheres
+  |> Context.Rel.of_list
 
 let where_program_type w =
   program_type w.where_program
@@ -370,7 +371,7 @@ and map_rel_rec_info f r =
   { r with rec_prob = map_rel_ctx_map f r.rec_prob }
 
 and map_rel_program_info f p =
-  { p with program_sign = List.map (Context.Rel.Declaration.map_relevance f) p.program_sign; }
+  { p with program_sign = Context.Rel.map_relevance f p.program_sign; }
 
 let is_nested p =
   match p.Syntax.program_rec with
@@ -926,7 +927,7 @@ let check_splitting env evd sp =
       let () = check_program w.where_program in
       let () = check_type ctx w.where_type in
       let () = check_term ctx (applist (w.where_program.program_term, w.where_program_args)) w.where_type in
-      let () = assert(w.where_context_length = List.length ctx) in
+      let () = assert(w.where_context_length = Context.Rel.length ctx) in
       let def = make_def (nameR (where_id w)) (Some (where_term w)) w.where_type in
       def :: ctx
     in
@@ -1123,7 +1124,7 @@ let solve_equations_obligations ~pm (flags : Equations_common.flags) recids loc 
     (* Force introductions to be able to shrink the bodies later on. *)
     List.map
       (fun (env, ev, evi, ctx, _) ->
-         Tacticals.tclDO (List.length ctx) Tactics.intro)
+         Tacticals.tclDO (Context.Rel.length ctx) Tactics.intro)
       types
   in
   (* Feedback.msg_debug (str"Starting proof"); *)
@@ -1203,7 +1204,7 @@ let solve_equations_obligations_program ~pm (flags : flags) recids loc i sigma h
       let ctx = Evd.evar_filtered_context evi in
       let tac = 
         Tacticals.tclTHEN 
-          (Tacticals.tclDO (List.length ctx - nc_len) Tactics.intro)
+          (Tacticals.tclDO (Context.Rel.length ctx - nc_len) Tactics.intro)
           flags.tactic
       in
       (id, ty, src, status, deps, Some tac))

@@ -119,14 +119,17 @@ let telescope_of_context env sigma ctx =
   - p : Tel(Γ) ⊢ Ctx(Γ) (a context of let-bindings made of each projection in order)
   - Γ ⊢ Intro(Γ) : Tel(Γ) (iterated constructors)
 *)
-let telescope env evd = function
+let telescope env evd ctx =
+  match Context.Rel.to_list ctx with
   | [] -> assert false
-  | [d] -> let (n, _, t) = to_tuple d in t, [of_tuple (n, Some (mkRel 1), Vars.lift 1 t)],
-                                        mkRel 1
+  | [d] -> let (n, _, t) = to_tuple d in
+    t, 
+    Context.Rel.of_list [of_tuple (n, Some (mkRel 1), Vars.lift 1 t)],
+    mkRel 1
   | d :: tl ->
       let (n, _, t) = to_tuple d in
       let len = succ (List.length tl) in
-      let ts = Retyping.get_sort_of (push_rel_context tl env) !evd t in
+      let ts = Retyping.get_sort_of (push_rel_context (Context.Rel.of_list tl) env) !evd t in
       let ts = ESorts.kind !evd ts in
       let ty, tys =
         let rec aux (ty, tyuniv, tys) ds =
@@ -135,7 +138,7 @@ let telescope env evd = function
           | d :: ds ->
             let (n, b, t) = to_tuple d in
             let pred = mkLambda (n, t, ty) in
-            let env = push_rel_context ds env in
+            let env = push_rel_context (Context.Rel.of_list ds) env in
             let sigty = mkAppG env evd (Lazy.force coq_sigma) [|t; pred|] in
             let _, u = destInd !evd (fst (destApp !evd sigty)) in
             let _, ua = UVars.Instance.to_array (EInstance.kind !evd u) in
@@ -170,7 +173,9 @@ let telescope env evd = function
           let proj2 = mkProj (Lazy.force coq_pr2, ERelevance.relevant, prev) in
 	    (Vars.lift 1 proj2, succ k, of_tuple (n, Some proj1, Vars.liftn 1 k t) :: subst))
 	(List.rev tys) tl (mkRel 1, 1, [])
-      in ty, (of_tuple (n, Some last, Vars.liftn 1 len t) :: subst), constr
+      in ty
+       , Context.Rel.of_list (of_tuple (n, Some last, Vars.liftn 1 len t) :: subst)
+       , constr
 
 let sigmaize ?(liftty=0) env0 evd pars f =
   let env = push_rel_context pars env0 in
@@ -179,7 +184,7 @@ let sigmaize ?(liftty=0) env0 evd pars f =
   let ctx = EConstr.Vars.smash_rel_context ctx in
   let argtyp, letbinders, make = telescope env evd ctx in
     (* Everyting is in env, move to index :: letbinders :: env *) 
-  let lenb = List.length letbinders in
+  let lenb = Context.Rel.length letbinders in
   let pred =
     mkLambda (nameR (Id.of_string "index"), argtyp,
 	      it_mkProd_or_LetIn
@@ -193,7 +198,7 @@ let sigmaize ?(liftty=0) env0 evd pars f =
   let valproj = Lazy.force coq_pr2 in
   let indices = 
     (List.rev_map (fun l -> Vars.substl (tl l) (hd l)) 
-     (Equations_common.proper_tails (List.map (fun d -> Option.get (pi2 (to_tuple d))) letbinders)))
+     (Equations_common.proper_tails (Context.Rel.to_list_map (fun d -> Option.get (pi2 (to_tuple d))) letbinders)))
   in
   let valsig =
     let argtyp = Vars.lift (succ lenb) argtyp in
@@ -225,11 +230,11 @@ let build_sig_of_ind env sigma (ind,u as indu) =
   let ctx = inductive_alldecls env indu in
   let ctx = EConstr.Vars.smash_rel_context ctx in
   let lenpars = mib.mind_nparams_rec in
-  let lenargs = List.length ctx - lenpars in
+  let lenargs = Context.Rel.length ctx - lenpars in
   if lenargs = 0 then
     user_err_loc (None,
 		 str"No signature to derive for non-dependent inductive types");
-  let args, pars = List.chop lenargs ctx in
+  let args, pars = Context.Rel.chop lenargs ctx in
   let parapp = mkApp (mkIndU indu, extended_rel_vect 0 pars) in
   let fullapp = mkApp (mkIndU indu, extended_rel_vect 0 ctx) in
   let evd = ref sigma in
@@ -257,7 +262,7 @@ let declare_sig_of_ind env sigma ~poly (ind,u) =
   let pack_id = add_suffix indid "_sig_pack" in
   let _, (sigma, pack_fn) =
     let vbinder = of_tuple (nameR (add_suffix indid "_var"), None, fullapp) in
-    let term = it_mkLambda_or_LetIn valsig (vbinder :: ctx) 
+    let term = it_mkLambda_or_LetIn valsig (Context.Rel.add vbinder ctx) 
     in
     (* let rettype = mkApp (mkConst indsig, extended_rel_vect (succ lenargs) pars) in *)
       declare_constant pack_id (simpl term)
@@ -323,7 +328,7 @@ let get_signature env sigma0 ty =
     Printer.pr_pinductive env sigma pind ++ str ".] to avoid this.");
     let indsig = pred in
     let vbinder = of_tuple (anonR, None, ty) in
-    let pack_fn = it_mkLambda_or_LetIn valsig (vbinder :: ctx) in
+    let pack_fn = it_mkLambda_or_LetIn valsig (Context.Rel.add vbinder ctx) in
     let args = List.map of_constr args in
     let pack_fn = beta_applist sigma (pack_fn, args) in
       (sigma, nf_evar sigma (mkApp (indsig, Array.of_list args)),
@@ -368,7 +373,7 @@ let pattern_sigma ~assoc_right c hyp env sigma =
 let curry_left_hyp env sigma c t =
   let aux c t na u ty pred concl =
     let (n, idx, dom) = destLambda sigma pred in
-    let newctx = [of_tuple (na, None, dom); of_tuple (n, None, idx)] in
+    let newctx = Context.Rel.of_list [of_tuple (na, None, dom); of_tuple (n, None, idx)] in
     let tuple = mkApp (mkConstructG coq_sigmaI u,
 		       [| Vars.lift 2 ty; Vars.lift 2 pred; mkRel 2; mkRel 1 |])
     in
@@ -409,19 +414,19 @@ let curry env sigma na c =
     | None -> 
        if is_global env sigma (Lazy.force logic_unit) t then
          let _, u = destInd sigma t in
-         [], constr_of_global_univ sigma (Lazy.force logic_unit_intro, u)
-       else [of_tuple (na,None,t)], mkRel 1
+         Context.Rel.empty, constr_of_global_univ sigma (Lazy.force logic_unit_intro, u)
+       else Context.Rel.of_list [of_tuple (na,None,t)], mkRel 1
     | Some (u, ty, pred) ->
        let na, _, codom =
          if isLambda sigma pred then destLambda sigma pred 
          else (anonR, ty, mkApp (pred, [|mkRel 1|])) in
        let ctx, rest = make_arg na codom in
-       let len = List.length ctx in 
+       let len = Context.Rel.length ctx in 
        let tuple = 
          mkApp (mkConstructG coq_sigmaI u,
 		[| Vars.lift (len + 1) ty; Vars.lift (len + 1) pred; mkRel (len + 1); rest |])
        in
-       ctx @ [of_tuple (na, None, ty)], tuple
+       Context.Rel.append ctx (Context.Rel.of_list [of_tuple (na, None, ty)]), tuple
   in
   make_arg na c
 
@@ -461,6 +466,7 @@ let uncurry_call env sigma fn c =
   let hd = mkApp (hd, params) in
   let ty = Retyping.get_type_of env sigma hd in
   let ctx, _ = Reductionops.whd_decompose_prod_decls env sigma ty in
+  let ctx = Context.Rel.to_list ctx in
   let ctx =
     let open Context.Rel.Declaration in
     let rec aux env ctx args =
@@ -476,17 +482,18 @@ let uncurry_call env sigma fn c =
       | ctx, [] -> []
     in List.rev (aux env (List.rev ctx) (Array.to_list args))
   in
+  let ctx = Context.Rel.of_list ctx in
   let evdref = ref sigma in
-  if CList.is_empty ctx then 
+  if Context.Rel.is_empty ctx then 
     user_err_loc (None, Pp.str"No arguments to uncurry");
   (* let ctx = (Anonymous, None, concl) :: ctx in *)
   let sigty, sigctx, constr = telescope env evdref ctx in
   let app = Vars.substl (Array.rev_to_list args) constr in
-  let fnapp = mkApp (hd, rel_vect 0 (List.length sigctx)) in
+  let fnapp = mkApp (hd, rel_vect 0 (Context.Rel.length sigctx)) in
   let fnapp = it_mkLambda_or_subst env fnapp sigctx in
   let projsid = nameR (Id.of_string "projs") in
   let fnapp_ty = Retyping.get_type_of
-      (push_rel_context [Context.Rel.Declaration.LocalAssum (projsid, sigty)] env)
+      (push_rel_context (Context.Rel.of_list [LocalAssum (projsid, sigty)]) env)
       !evdref fnapp in
   (* TODO: build (packargs, fn packargs.projs) = (args, c) equality *)
   let sigma, sigmaI = get_fresh !evdref coq_sigmaI in
@@ -494,7 +501,7 @@ let uncurry_call env sigma fn c =
     mkApp (sigmaI, [| sigty; mkLambda (projsid, sigty, fnapp_ty); mkRel 1; fnapp |])
   in
   let sigma, _ =
-    Typing.type_of (push_rel_context [Context.Rel.Declaration.LocalAssum (projsid, sigty)] env) sigma packed
+    Typing.type_of (push_rel_context (Context.Rel.of_list [LocalAssum (projsid, sigty)]) env) sigma packed
   in
   sigma, app, packed, sigty
 

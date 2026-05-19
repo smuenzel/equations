@@ -60,7 +60,7 @@ let derive_noConfusion_package ~pm env sigma ~poly (ind,u as indu) indid ~prefix
   let ctx = smash_rel_context ctx in
   let len =
     if prefix = "" then mindb.mind_nparams
-    else List.length ctx in
+    else Context.Rel.length ctx in
   let argsvect = rel_vect 0 len in
   let noid = add_prefix "noConfusion" (add_prefix prefix (add_prefix "_" indid))
   and packid = add_prefix "NoConfusion" (add_prefix prefix (add_prefix "Package_" indid)) in
@@ -112,7 +112,7 @@ let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
   let ctx = List.map of_rel_decl oneind.mind_arity_ctxt in
   let ctx = subst_instance_context (snd indu) ctx in
   let ctx = smash_rel_context ctx in
-  let len = List.length ctx in
+  let len = Context.Rel.length ctx in
   let params = mindb.mind_nparams in
   let args = oneind.mind_nrealargs in
   let argsvect = rel_vect 0 len in

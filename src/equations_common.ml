@@ -151,7 +151,7 @@ let typecheck_rel_context env evd ctx =
   let open Context.Rel.Declaration in
   try
   let _ =
-    List.fold_right
+    Context.Rel.fold_outside
       (fun rel env ->
 	 check_type env evd (get_type rel);
 	 Option.iter (fun c -> check_term env evd c (get_type rel)) (get_value rel);
@@ -564,7 +564,7 @@ let lift_rel_contextn k n sign =
       of_tuple (na,Option.map (Vars.liftn n k) c, Vars.liftn n k t)::(liftrec (k-1) sign)
     | [] -> []
   in
-  liftrec (Context.Rel.length sign + k) sign
+  liftrec (Context.Rel.length ctx sign + k) sign
 
 let lift_rel_context n sign = lift_rel_contextn 0 n sign
 
@@ -578,8 +578,8 @@ let lift_list l = List.map (Vars.lift 1) l
 (*       | Lambda _ -> decompose_lam_assum c  *)
 (*       | _ -> [], c *)
 (*     in *)
-(*       (interval 0 (List.length ctx),  *)
-(*       List.length ctx, body) *)
+(*       (interval 0 (Context.Rel.length ctx),  *)
+(*       Context.Rel.length ctx, body) *)
 (*   in *)
 (*   let params_of_args pars n args = *)
 (*     Array.fold_left *)

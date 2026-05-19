@@ -113,7 +113,7 @@ val patvars_of_ctx : ?with_lets:bool -> ('a,'b,'c) Context.Rel.pt -> pat list
 
 val pat_vars_list : int -> pat list
 val intset_of_list : Int.Set.elt list -> Int.Set.t
-val split_context : int -> 'a list -> 'a list * 'a * 'a list
+val split_context : int -> ('a,'b,'c) Context.Rel.pt -> ('a,'b,'c) Context.Rel.pt * ('a,'b,'c) Context.Rel.Declaration.pt * ('a,'b,'c) Context.Rel.pt
 val split_tele :
   int ->
   rel_context ->

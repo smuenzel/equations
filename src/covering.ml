@@ -265,7 +265,7 @@ let lets_of_ctx env ctx evars s =
       try ids, pred i, (make_def (nameR (List.assoc i varsubst)) b t :: ctx')
       with Not_found -> 
         let id' = Namegen.next_name_away n.Context.binder_name ids in
-        Id.Set.add id' ids, pred i, (make_def (nameR id') b t :: ctx')) ctx (ids, List.length ctx, [])
+        Id.Set.add id' ids, pred i, (make_def (nameR id') b t :: ctx')) ctx (ids, Context.Rel.length ctx, [])
   in pats, ctxs, ctx'
 
 let env_of_rhs evars ctx env s lets = 

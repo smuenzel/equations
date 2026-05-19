@@ -855,14 +855,14 @@ let subst_rec_programs env evd ps =
          * Feedback.msg_debug Pp.(str"cutprob : " ++ pr_context_map env !evd cutprob'); *)
         let wsubst0 = push_decls_map env !evd subst cutprob' wcontext in
         (* Feedback.msg_debug Pp.(str"new substitution in subst rec : " ++ pr_context_map env !evd wsubst0); *)
-        let ctxlen = List.length wcontext + List.length ctx in
+        let ctxlen = List.length wcontext + Context.Rel.length ctx in
         let wp = where_program in
         let where_type = mapping_constr !evd wsubst0 where_type in
         (* The substituted prototypes must be lifted w.r.t. the new variables bound in this where and
            preceding ones. *)
         let s = List.map (fun (id, (recarg, b)) ->
             (id, (recarg, lift ((* List.length subst_wheres + *)
-                                List.length wp.program_prob.src_ctx - List.length ctx) b))) lhss in
+                                List.length wp.program_prob.src_ctx - Context.Rel.length ctx) b))) lhss in
         let wp' =
           match subst_programs path s ctxlen [wp] [where_term w] with
           | [wp'] -> wp'
@@ -1595,7 +1595,7 @@ let build_equations ~pm with_ind env evd ?(alias:alias option) rec_info progs =
     let cstr =
       match c with
       | RProgram c ->
-          let len = List.length ctx in
+          let len = Context.Rel.length ctx in
           let hyps, hypslen, c' =
             abstract_rec_calls !evd user_obls rec_info len protos (Reductionops.nf_beta env !evd c)
           in

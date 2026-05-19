@@ -375,7 +375,7 @@ let aux_ind_fun info chop nested unfp unfids p =
               let sort = Retyping.get_sort_of env sigma concl in
               let hd, args = decompose_app sigma concl in
               let subst =
-                gather_subst env sigma (Retyping.get_type_of env sigma hd) args (List.length ctx)
+                gather_subst env sigma (Retyping.get_type_of env sigma hd) args (Context.Rel.length ctx)
               in
               let arity, arg, rel =
                 let arg = substl (List.rev subst) r.wf_rec_arg in
@@ -524,7 +524,7 @@ let aux_ind_fun info chop nested unfp unfids p =
                                       str " subst " ++ prlist_with_sep spc (Printer.pr_econstr_env env evd) subst ++
                                       str " final term " ++ pr_econstr_env env evd newwhere ++
                                       str "context " ++ pr_context env evd sign);
-                0, ctx, newwhere, fst chop (* + List.length ctx *), unfids
+                0, ctx, newwhere, fst chop (* + Context.Rel.length ctx *), unfids
               | Some w ->
                 let assoc, unf, split =
                   try PathMap.find w.where_path info.wheremap
@@ -549,7 +549,7 @@ let aux_ind_fun info chop nested unfp unfids p =
                                       prlist_with_sep spc (Printer.pr_econstr_env env evd) subst ++
                                       str"New where term" ++ Printer.pr_econstr_env env evd newwhere ++
                                       str" context map " ++ pr_context env Evd.empty ctx);
-                0, ctx, newwhere, -1 (* + List.length ctx *), unf :: unfids
+                0, ctx, newwhere, -1 (* + Context.Rel.length ctx *), unf :: unfids
             in
             let chop = fstchop, snd chop in
             let wheretac =
@@ -999,7 +999,7 @@ let extract_subprogram_trace env sigma where_map trace =
       let evd = ref sigma in
       let ty =
         let ctx = unfwp.program_info.program_sign in
-        let len = List.length ctx - List.length lctx in
+        let len = Context.Rel.length ctx - List.length lctx in
         let newctx, oldctx = List.chop len ctx in
         let lhs = mkApp (lift len assoc, extended_rel_vect 0 newctx) in
         let rhs = mkApp (unfwp.program_term, extended_rel_vect 0 ctx) in

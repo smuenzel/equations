@@ -517,7 +517,7 @@ let compose_term (env : Environ.env) (evd : Evd.evar_map ref)
       let Evd.EvarInfo ev1_info = Evd.find !evd ev1 in
       let ev1_ctx = Evd.evar_context ev1_info in
       (* Keep only the context corresponding to [ctx1]. *)
-      let named_ctx1 = CList.firstn (List.length ctx1) ev1_ctx in
+      let named_ctx1 = CList.firstn (Context.Rel.length ctx1) ev1_ctx in
       (* Now keep only the names and make terms out of them. *)
       let subst_ctx1 = List.map (fun decl ->
         let id = Context.Named.Declaration.get_id decl in

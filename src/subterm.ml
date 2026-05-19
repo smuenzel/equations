@@ -48,7 +48,7 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
     | Set -> mkSet
     | Qual (QConstant QType | QGlobal _ | QVar _) -> EConstr.mkSort (ESorts.make indsort)
   in
-  let len = List.length ctx in
+  let len = Context.Rel.length ctx in
   let params = mind.mind_nparams_rec in
   (* let ctx = map_rel_context refresh_universes ctx in FIXME *)
   let lenargs = len - params in
@@ -73,7 +73,7 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
       let constrargs = getargs concl in
       let branches = List.map_i
         (fun j (ctx, i', r, rargs) ->
-          let ctxlen = List.length ctx in
+          let ctxlen = Context.Rel.length ctx in
           let subargs =
             Array.of_list ((extended_rel_list (lenargs' + ctxlen)
                                parambinders)

@@ -115,9 +115,9 @@ and pat_of_constr env sigma c =
   | _ -> PInac c
 
 
-let rec pat_to_user_pat ?(avoid = ref Id.Set.empty) ?loc ctx = function
+let rec pat_to_user_pat ?(avoid = ref Id.Set.empty) ?loc (ctx : rel_context) = function
   | PRel i ->
-    let decl = List.nth ctx (pred i) in
+    let decl = Context.Rel.nth ctx (pred i) in
     let name = Context.Rel.Declaration.get_name decl in
     let id = Namegen.next_name_away name !avoid in
     avoid := Id.Set.add id !avoid;
@@ -146,13 +146,13 @@ let do_renamings env sigma ctx =
         | Name id ->
           let id' = Namegen.next_ident_away id ids in
           let decl' = make_def {n with binder_name = Name id'} b t in
-          (Id.Set.add id' ids, decl' :: acc)
+          (Id.Set.add id' ids, Context.Rel.add decl' acc)
         | Anonymous ->
           let id' = Namegen.id_of_name_using_hdchar (push_rel_context acc env) sigma t Anonymous in
           let id' = Namegen.next_ident_away id' ids in
           let decl' = make_def {n with binder_name = Name id'} b t in
-          (Id.Set.add id' ids, decl' :: acc))
-      ctx (Id.Set.empty, [])
+          (Id.Set.add id' ids, Context.Rel.add decl' acc))
+      ctx (Id.Set.empty, Context.Rel.empty)
   in ctx'
 
 (** Pretty-printing *)
@@ -186,7 +186,8 @@ let pr_context_map env sigma { src_ctx = delta; map_inst = patcs; tgt_ctx = gamm
   let env' = push_rel_context delta env in
   let ctx = pr_context env sigma delta in
   let ctx' = pr_context env sigma gamma in
-  v 0 (v 0 ((if List.is_empty delta then ctx else ctx) ++ cut () ++
+  (* CR smuenzel: then ctx else ctx seems like an error *)
+  v 0 (v 0 ((if Context.Rel.is_empty delta then ctx else ctx) ++ cut () ++
             str "============================" ++ cut ()  ++
             pr_pats env' sigma patcs) ++ cut () ++
        str "============================" ++ cut ()  ++
@@ -209,7 +210,7 @@ let typecheck_map env evars { src_ctx = ctx; map_inst =  subst; tgt_ctx = ctx' }
          let evars, c = constr_of_pat ~inacc_and_hide:false env evars p in
          check_term env evars c (substl subst t);
          (evars, c :: subst))
-      ctx' subst (evars, [])
+      (Context.Rel.to_list ctx') subst (evars, [])
   in ()
 
 let check_ctx_map ?(unsafe = false) env evars map =
@@ -348,7 +349,7 @@ let make_permutation ?(env = Global.env ()) (sigma : Evd.evar_map) map1 map2 : c
   let pats1 = map1.map_inst in
   let ctx2 = map2.src_ctx in
   let pats2 = map2.map_inst in
-  let len = List.length ctx1 in
+  let len = Context.Rel.length ctx1 in
   let perm = Array.make len None in
   let merge_rels i1 i2 =
     match perm.(pred i2) with
@@ -366,7 +367,7 @@ let make_permutation ?(env = Global.env ()) (sigma : Evd.evar_map) map1 map2 : c
   in
   let reduce env sigma c =
     let nenv = Environ.pop_rel_context (Environ.nb_rel env) env in
-    let ctx = List.map Context.Rel.Declaration.drop_body (Environ.rel_context env) in
+    let ctx = Context.Rel.drop_bodies (Environ.rel_context env) in
     let nenv = Environ.push_rel_context ctx nenv in
     let c' = Reductionops.clos_whd_flags RedFlags.all nenv sigma c in
     c'
@@ -420,24 +421,24 @@ let specialize_mapping_constr sigma (m : context_map) c =
   specialize_constr sigma m.map_inst c
 
 let rels_of_ctx ?(with_lets=true) ctx = 
-  let len = List.length ctx in
+  let len = Context.Rel.length ctx in
   if with_lets then Termops.rel_list 0 len  (* len first *)
   else 
     List.rev 
       (CList.map_filter_i (fun i d ->
         if Context.Rel.Declaration.is_local_assum d then
           Some (mkRel (succ i))
-        else None) ctx)
+        else None) (Context.Rel.to_list ctx))
 
 let patvars_of_ctx ?(with_lets=true) ctx =
-  let len = List.length ctx in
+  let len = Context.Rel.length ctx in
   if with_lets then
     CList.init len (fun i -> PRel (len - i))
   else 
     CList.rev (CList.map_filter_i (fun i d ->
       if Context.Rel.Declaration.is_local_assum d then
         Some (PRel (succ i))
-      else None) ctx)
+      else None) (Context.Rel.to_list ctx))
 
 let pat_vars_list n = CList.init n (fun i -> PRel (succ i))
 
@@ -445,10 +446,12 @@ let intset_of_list =
   fold_left (fun s x -> Int.Set.add x s) Int.Set.empty
 
 let split_context n c =
-  let after, before = List.chop n c in
-  match before with
-  | hd :: tl -> after, hd, tl
-  | [] -> raise (Invalid_argument "split_context")
+  let after, before = Context.Rel.chop n c in
+  try
+    Context.Rel.nth before 0
+  , Context.Rel.skipn 1 before
+  with
+  | Failure _ | Invalid_argument _ -> raise (Invalid_argument "split_context")
 
 let split_tele n (ctx : rel_context) =
   let rec aux after n l =
@@ -456,12 +459,16 @@ let split_tele n (ctx : rel_context) =
     | 0, decl :: before -> before, decl, List.rev after
     | n, decl :: before -> aux (decl :: after) (pred n) before
     | _ -> raise (Invalid_argument "split_tele")
-  in aux [] n ctx
+  in
+  let ctx0, d, ctx1 = aux [] n (Context.Rel.to_list ctx) in
+  let ctx0 = Context.Rel.of_list ctx0 in
+  let ctx1 = Context.Rel.of_list ctx1 in
+  ctx0, d, ctx1
 
 (* Compute the transitive closure of the dependency relation for a term in a context *)
 
 let rels_above ctx x =
-  let len = List.length ctx in
+  let len = Context.Rel.length ctx in
   intset_of_list (CList.init (len - x) (fun i -> x + succ i))
 
 
@@ -477,12 +484,12 @@ let fix_rels env sigma ctx =
     1 Int.Set.empty ctx
 
 let rec dependencies_of_rel ~with_red env evd ctx k x =
-  let (n,b,t) = to_tuple (nth ctx (pred k)) in
+  let (n,b,t) = to_tuple (Context.Rel.nth ctx (pred k)) in
   let b = Option.map (lift k) b and t = lift k t in
   let bdeps = match b with Some b -> dependencies_of_term ~with_red env evd ctx b x | None -> Int.Set.empty in
   Int.Set.union (Int.Set.singleton k) (Int.Set.union bdeps (dependencies_of_term ~with_red env evd ctx t x))
 
-and dependencies_of_term ~with_red env evd ctx t x =
+and dependencies_of_term ~with_red env evd (ctx : rel_context) t x =
   (* First we get the syntactic dependencies of t. *)
   let rels = Termops.free_rels evd t in
   let rels =
