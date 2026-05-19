@@ -388,8 +388,8 @@ let aux_ind_fun info chop nested unfp unfids p =
                 let sigma, arity = Typing.type_of envsign sigma term in
                 let ty = Reductionops.nf_all envsign sigma arity in
                 let arity =
-                  if noccur_between sigma 1 (length inctx) ty then
-                    lift (- length inctx) ty
+                  if noccur_between sigma 1 (Context.Rel.length inctx) ty then
+                    lift (- Context.Rel.length inctx) ty
                   else assert false
                 in
                 arity, arg, r.wf_rec_rel
@@ -504,7 +504,7 @@ let aux_ind_fun info chop nested unfp unfids p =
       let unfctx, unfswheres =
         let unfs = map_opt_split destWheres unfs in
         match unfs with
-        | None -> [], List.map (fun _ -> None) wheres
+        | None -> Context.Rel.empty, List.map (fun _ -> None) wheres
         | Some (unfctx, wheres) -> unfctx.src_ctx, List.map (fun w -> Some w) wheres
       in
       let wheretac =
