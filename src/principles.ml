@@ -123,7 +123,7 @@ let clean_rec_calls sigma (hyps, c) =
   let hyps =
     CMap.fold (fun ty n hyps ->
       let ctx, concl = Term.decompose_prod_decls ty in
-      let len = List.length ctx in
+      let len = Context.Rel.length ctx in
       if Vars.noccur_between 1 len concl then
           if CMap.mem (Constr.lift (-len) concl) hyps then hyps
           else CMap.add ty n hyps
