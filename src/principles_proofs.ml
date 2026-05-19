@@ -415,7 +415,7 @@ let aux_ind_fun info chop nested unfp unfids p =
               (* The recursive argument is local to the where, shift it by the
                  length of the enclosing context *)
               equations_debug (fun () -> str"Fixpoint on " ++ int idx ++ str " rec args " ++ int t.rec_args ++
-                                         str " lctx " ++ int (List.length lctx));
+                                         str " lctx " ++ int (Context.Rel.length lctx));
               let newidx = match unfs with None -> idx | Some _ -> idx in
               observe "struct fix" (tclTHENLIST [(* unftac false; *)
                   FixTactics.fix recid (succ newidx);
@@ -515,8 +515,8 @@ let aux_ind_fun info chop nested unfp unfids p =
               | None ->
                 let term = where_term s in
                 let sign = wp.program_info.program_sign in
-                let ctxlen = List.length sign - List.length subst in
-                let before, after = List.chop ctxlen sign in
+                let ctxlen = Context.Rel.length sign - List.length subst in
+                let before, after = Context.Rel.chop ctxlen sign in
                 let newwhere = substl subst term in
                 let ctx = subst_rel_context 0 subst before in
                 if !Equations_common.debug then
@@ -535,10 +535,10 @@ let aux_ind_fun info chop nested unfp unfids p =
                                       str" type: " ++ pr_econstr_env env evd w.where_type ++ str" assoc " ++
                                       pr_econstr_env env evd assoc);
                 let unfwp = w.where_program in
-                let ctxlen = List.length unfwp.program_info.program_sign - List.length unfctx in
-                let before, after = List.chop ctxlen unfwp.program_info.program_sign in
+                let ctxlen = Context.Rel.length unfwp.program_info.program_sign - Context.Rel.length unfctx in
+                let before, after = Context.Rel.chop ctxlen unfwp.program_info.program_sign in
                 let subst =
-                  if not (List.length subst >= List.length after) then
+                  if not (List.length subst >= Context.Rel.length after) then
                     anomaly (str"Mismatch between hypotheses in named context and program")
                   else subst
                 in
@@ -646,7 +646,7 @@ let aux_ind_fun info chop nested unfp unfids p =
                 (observe "solving nested recursive call" (solve_nested ()))]))
 
     | Mapping (_, s) -> aux chop unfs unfids s
-  in aux_program [] chop unfp unfids None p
+  in aux_program Context.Rel.empty chop unfp unfids None p
 
 let pr_subgoals sigma goals =
   let open Pp in
@@ -856,7 +856,7 @@ let ind_fun_tac is_rec f info fid nested progs =
        | _ -> Exninfo.iraise e)
 
 let is_primitive env evd ctx var =
-  let decl = List.nth ctx var in
+  let decl = Context.Rel.nth ctx var in
   let indf, _ = find_rectype env evd (Context.Rel.Declaration.get_type decl) in
   let (ind,_), _ = dest_ind_family indf in
   let mspec = Inductive.lookup_mind_specif env ind in
@@ -949,7 +949,7 @@ let compute_unfold_trace env sigma where_map split unfold_split =
       let data = List.map2 map wheres unfwheres in
       UnfComputeProgram (data, lhs.src_ctx)
     | Compute (_, _, _, _), Compute (lhs, _, _, REmpty (id, sp)) ->
-      let d = nth lhs.src_ctx (pred id) in
+      let d = Context.Rel.nth lhs.src_ctx (pred id) in
       let id = Name.get_id (get_name d) in
       UnfComputeEmpty id
     | _, _ -> assert false
@@ -999,8 +999,8 @@ let extract_subprogram_trace env sigma where_map trace =
       let evd = ref sigma in
       let ty =
         let ctx = unfwp.program_info.program_sign in
-        let len = Context.Rel.length ctx - List.length lctx in
-        let newctx, oldctx = List.chop len ctx in
+        let len = Context.Rel.length ctx - Context.Rel.length lctx in
+        let newctx, oldctx = Context.Rel.chop len ctx in
         let lhs = mkApp (lift len assoc, extended_rel_vect 0 newctx) in
         let rhs = mkApp (unfwp.program_term, extended_rel_vect 0 ctx) in
         let eq = mkEq env evd unfwp.program_info.program_arity lhs rhs in
