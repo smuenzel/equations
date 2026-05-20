@@ -18,18 +18,18 @@ open Vars
 
 let name_context env sigma ctx =
   let avoid, ctx =
-    List.fold_right (fun decl (avoid, acc) ->
+    Context.Rel.fold_outside (fun decl (avoid, acc) ->
       let (n, b, t) = to_tuple decl in
       match n.binder_name with
       | Name id -> let id' = Namegen.next_ident_away id avoid in
         let avoid = Id.Set.add id' avoid in
-        (avoid, make_def (nameR id') b t :: acc)
+        (avoid, Context.Rel.add (make_def (nameR id') b t) acc)
       | Anonymous ->
         let id' = Namegen.id_of_name_using_hdchar
             (push_rel_context acc env) sigma t Anonymous in
         let avoid = Id.Set.add id' avoid in
-        (avoid, make_def (nameR id') b t :: acc))
-      ctx (Id.Set.empty, [])
+        (avoid, Context.Rel.add (make_def (nameR id') b t) acc))
+      ctx ~init:(Id.Set.empty, Context.Rel.empty)
   in ctx
 
 let occur_rigidly sigma i concl =
@@ -51,11 +51,11 @@ let get_forced_positions sigma args concl =
     if occur_rigidly sigma i concl then true :: acc
     else false :: acc
   in
-  List.rev (List.fold_left_i is_forced 1 [] args)
+  List.rev (Context.Rel.fold_inside_i is_forced 1 ~init:[] args)
 
 let derive_noConfusion_package ~pm env sigma ~poly (ind,u as indu) indid ~prefix ~tactic cstNoConf =
   let mindb, oneind = Global.lookup_inductive ind in
-  let ctx = List.map of_rel_decl oneind.mind_arity_ctxt in
+  let ctx = Context.Rel.map_decl of_rel_decl oneind.mind_arity_ctxt in
   let ctx = subst_instance_context (snd indu) ctx in
   let ctx = smash_rel_context ctx in
   let len =
@@ -109,7 +109,7 @@ let derive_noConfusion_package ~pm env sigma ~poly (ind,u as indu) indid ~prefix
 let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
   let mindb, oneind = Global.lookup_inductive ind in
   let _, inds = Reductionops.dest_arity env sigma0 (Inductiveops.type_of_inductive env indu) in
-  let ctx = List.map of_rel_decl oneind.mind_arity_ctxt in
+  let ctx = Context.Rel.map_decl of_rel_decl oneind.mind_arity_ctxt in
   let ctx = subst_instance_context (snd indu) ctx in
   let ctx = smash_rel_context ctx in
   let len = Context.Rel.length ctx in
@@ -125,9 +125,9 @@ let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
   let ctx = name_context env sigma ctx in
   let xid = Id.of_string "x" and yid = Id.of_string "y" in
   let xdecl = of_tuple (nameR xid, None, argty) in
-  let binders = xdecl :: ctx in
+  let binders = Context.Rel.add xdecl ctx in
   let ydecl = of_tuple (nameR yid, None, lift 1 argty) in
-  let fullbinders = ydecl :: binders in
+  let fullbinders = Context.Rel.add ydecl binders in
   let sigma, s =
     let open UnivGen.QualityOrSet in
     match Lazy.force logic_sort with
@@ -155,13 +155,13 @@ let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
   let sigma, sigI = get_fresh sigma coq_sigmaI in
   let sigma, eqT = get_fresh sigma logic_eq_type in
   let parampats =
-    List.rev_map (fun decl ->
+    Context.Rel.to_list_rev_map (fun decl ->
         DAst.make Syntax.(PUVar (Name.get_id (get_name decl), Generated))) ctx
   in
   let mk_clause i ty =
     let paramsctx, concl = decompose_prod_n_decls sigma params ty in
-    let _, ctxpars = List.chop args ctx in
-    let ctxvars = List.map (fun decl -> mkVar (Name.get_id (get_name decl))) ctxpars in
+    let _, ctxpars = Context.Rel.chop args ctx in
+    let ctxvars = Context.Rel.to_list_map (fun decl -> mkVar (Name.get_id (get_name decl))) ctxpars in
     let args, concl = decompose_prod_decls sigma (Vars.substnl ctxvars 0 concl) in
     let forced = get_forced_positions sigma args concl in
     let loc = None in
@@ -184,7 +184,7 @@ let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
         else ((name, name', get_type decl) :: acc) in
       (avoid, acc), Syntax.(PUVar (name, User), PUVar (name', User))
     in
-    let (avoid, eqs), user_pats = List.fold_left2_map fn (Id.Set.empty, []) args forced in
+    let (avoid, eqs), user_pats = List.fold_left2_map fn (Id.Set.empty, []) (Context.Rel.to_list args) forced in
     let patl, patr = List.split user_pats in
     let cstr ps = Syntax.PUCstr ((ind, succ i), params, List.rev_map (fun p -> DAst.make p) ps) in
     let lhs = parampats @ [DAst.make (cstr patl); DAst.make (cstr patr)] in
@@ -229,7 +229,7 @@ let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
                 with_eqns = false; with_ind = false; 
                 allow_aliases = true; (* We let the compiler unify arguments that are forced equal *)
                 tactic = !Declare.Obls.default_tactic };
-      fixdecls = [];
+      fixdecls = Context.Rel.empty;
       intenv = Constrintern.empty_internalization_env;
       notations = []
     }
@@ -274,7 +274,7 @@ let derive_no_confusion_hom ~pm env sigma0 ~poly (ind,u as indu) =
       ~prefix:"Hom" ~tactic:(noconf_hom_tac ()) program_cst
  in
  let prog = Splitting.make_single_program env evd data.Covering.flags p ctxmap splitting None in
- Splitting.define_programs ~pm env evd UState.default_univ_decl [None] [] data.Covering.flags [prog] hook
+ Splitting.define_programs ~pm env evd UState.default_univ_decl [None] Context.Rel.empty data.Covering.flags [prog] hook
 
 let () =
   let derive_no_confusion_hom ~pm env sigma ~poly v =
