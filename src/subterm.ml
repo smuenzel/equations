@@ -52,22 +52,22 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
   let params = mind.mind_nparams_rec in
   (* let ctx = map_rel_context refresh_universes ctx in FIXME *)
   let lenargs = len - params in
-  let argbinders, parambinders = List.chop lenargs (List.map of_rel_decl ctx) in
+  let argbinders, parambinders = Context.Rel.chop lenargs (Context.Rel.map_decl of_rel_decl ctx) in
   let indapp = mkApp (mkIndU indu, extended_rel_vect 0 parambinders) in
   let getargs t = snd (Array.chop params (snd (decompose_app sigma t))) in
   let inds =
     let branches = Array.mapi (fun i ty ->
       let args, concl = decompose_prod_decls sigma (of_constr ty) in
-      let lenargs = List.length args in
+      let lenargs = Context.Rel.length args in
       let lenargs' = lenargs - params in
-      let args', params' = List.chop lenargs' args in
-      let recargs = CList.map_filter_i (fun i decl ->
+      let args', params' = Context.Rel.chop lenargs' args in
+      let recargs =  CList.map_filter_i (fun i decl ->
         let (n, _, t) = to_tuple decl in
         let ctx, ar = decompose_prod_decls sigma t in
           match kind sigma (fst (decompose_app sigma ar)) with
           | Ind (ind',_) when Environ.QInd.equal env ind' ind ->
               Some (ctx, i, mkRel (succ i), getargs (lift (succ i) ar))
-          | _ -> None) args'
+          | _ -> None) (Context.Rel.to_list args')
       in
       let constr = mkApp (mkConstructUi (indu, succ i), extended_rel_vect 0 args) in
       let constrargs = getargs concl in
@@ -99,7 +99,7 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
                  (indna "y", None, indapp 1);
                  (indna "x", None, indapp 0)]
     in
-    let binders = to_context terms @ liftargbinders' @ liftargbinders @ argbinders in
+    let binders = Context.Rel.(append (to_context terms) (append liftargbinders' (append liftargbinders argbinders))) in
     let lenbinders = 3 * succ lenargs in
     let xy =
       (mkApp (mkRel (succ lenbinders + params),
@@ -135,9 +135,9 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
       add_suffix subtermid ("_" ^ string_of_int i ^ "_" ^ string_of_int j))
       branches
     in
-    let lenargs = List.length argbinders in
+    let lenargs = Context.Rel.length argbinders in
     let liftedbinders = lift_rel_context lenargs argbinders in
-    let binders = liftedbinders @ argbinders in
+    let binders = Context.Rel.append liftedbinders argbinders in
     let appparams = mkApp (mkIndU ind, extended_rel_vect (2 * lenargs) parambinders) in
     let arity = it_mkProd_or_LetIn
       (mkProd (annotR Anonymous, mkApp (appparams, extended_rel_vect lenargs argbinders),
@@ -162,7 +162,7 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
     let inductive =
       { mind_entry_record = None;
         mind_entry_finite = Declarations.Finite;
-        mind_entry_params = List.map (fun d -> to_rel_decl sigma (Context.Rel.Declaration.map_constr refresh_universes d)) parambinders;
+        mind_entry_params = Context.Rel.map_decl (fun d -> to_rel_decl sigma (Context.Rel.Declaration.map_constr refresh_universes d)) parambinders;
         mind_entry_inds = inds;
         mind_entry_private = None;
         mind_entry_universes = uctx;
@@ -197,7 +197,7 @@ let derive_subterm ~pm env sigma ~poly (ind, u as indu) =
     let kl = get_class sigma kl in
     let parambinders, body, ty =
       let pars, ty, rel =
-        if List.is_empty argbinders then
+        if Context.Rel.is_empty argbinders then
           (* Standard homogeneous well-founded relation *)
           parambinders, indapp, mkApp (subind, extended_rel_vect 0 parambinders)
         else
@@ -284,19 +284,19 @@ let derive_below env sigma ~poly (ind,univ as indu) =
   let params = mind.mind_nparams in
   let realargs = oneind.mind_nrealargs in
   let realdecls = oneind.mind_nrealdecls in
-  let ctx = List.map of_rel_decl ctx in
+  let ctx = Context.Rel.map_decl of_rel_decl ctx in
   let allargsvect = extended_rel_vect 0 ctx in
   let indty = mkApp (mkIndU indu, allargsvect) in
   let indr = ERelevance.make oneind.mind_relevance in
-  let ctx = of_tuple (make_annot (Name (Id.of_string "c")) indr, None, indty) :: ctx in
-  let argbinders, parambinders = List.chop (succ realdecls) ctx in
+  let ctx = Context.Rel.add (of_tuple (make_annot (Name (Id.of_string "c")) indr, None, indty)) ctx in
+  let argbinders, parambinders = Context.Rel.chop (succ realdecls) ctx in
   let u = evd_comb0 (Evd.new_sort_variable Evd.univ_rigid) evd in
   let ru = Retyping.relevance_of_sort u in
   let u = mkSort u in
   let arity = it_mkProd_or_LetIn u argbinders in
   let aritylam = lift (succ realdecls) (it_mkLambda_or_LetIn u argbinders) in
   let paramsvect = rel_vect (succ realdecls) params in
-  let argsvect = extended_rel_vect 0 (CList.firstn (succ realdecls) ctx) in
+  let argsvect = extended_rel_vect 0 (Context.Rel.firstn (succ realdecls) ctx) in
   let pid = Id.of_string "P" in
   let pdecl = make_assum (make_annot (Name pid) ru) arity in
   let arity = lift 1 arity in
@@ -315,13 +315,13 @@ let derive_below env sigma ~poly (ind,univ as indu) =
       let nargs = constructor_nrealargs env (ind, succ i) in
       let recarg = mkVar recid in
       let args, _ = decompose_prod_decls !evd ty in
-      let args, _ = List.chop (List.length args - params) args in
+      let args, _ = Context.Rel.chop (Context.Rel.length args - params) args in
       let ty' = replace_term !evd (mkApp (mkIndU (ind,univ), rel_vect (-params) params)) recarg ty in
       let args', _ = decompose_prod_decls !evd ty' in
-      let args', _ = List.chop (List.length args' - params) args' in
-      let arg_tys = fst (List.fold_left (fun (acc, n) decl ->
-        let t = get_type decl in
-	((mkRel n, lift n t) :: acc, succ n)) ([], 1) args')
+      let args', _ = Context.Rel.chop (Context.Rel.length args' - params) args' in
+      let arg_tys = fst (Context.Rel.fold_inside (fun (acc, n) decl ->
+          let t = get_type decl in
+          ((mkRel n, lift n t) :: acc, succ n)) ~init:([], 1) args')
       in
       let fold_unit f args =
 	let res = 
@@ -342,7 +342,7 @@ let derive_below env sigma ~poly (ind,univ as indu) =
         let prem, res = decompose_prod_decls !evd t in
         let t, args = decompose_app !evd res in
           if eq_constr !evd t recarg then
-            let nprem = List.length prem in
+            let nprem = Context.Rel.length prem in
             let elt = mkApp (lift nprem c, rel_vect 0 nprem) in
             let args = Array.append args [| elt |] in
             let res, ty = f args nprem in
@@ -383,7 +383,7 @@ let derive_below env sigma ~poly (ind,univ as indu) =
   in
   let fixB = mkFix (([| realargs |], 0), ([| make_annot (Name recid) ru |], [| arity |],
 				     [| subst_vars !evd [recid; pid] termB |])) in
-  let bodyB = it_mkLambda_or_LetIn fixB (pdecl :: parambinders) in
+  let bodyB = it_mkLambda_or_LetIn fixB Context.Rel.(add pdecl parambinders) in
   let id = add_prefix "Below_" (Nametab.basename_of_global (GlobRef.IndRef ind)) in
   let _, (evd, belowB) = declare_constant id bodyB None ~poly !evd
       ~kind:Decls.(IsDefinition Definition) in
@@ -397,7 +397,7 @@ let derive_below env sigma ~poly (ind,univ as indu) =
   let bodyb = 
     it_mkLambda_or_LetIn
       (subst_vars evd [pid] (mkLambda_or_LetIn stepdecl fixb))
-      (pdecl :: parambinders)
+      Context.Rel.(add pdecl parambinders)
   in
   let bodyb = replace_vars evd [belowid, belowB] bodyb in
   let bodyb = Evarutil.nf_evar evd bodyb in

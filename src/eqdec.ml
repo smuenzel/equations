@@ -42,7 +42,7 @@ type mutual_inductive_info = {
   mutind_inds : one_inductive_info array; (* Each inductive. *)
 }
 
-let erel_context = List.map of_rel_decl
+let erel_context = Context.Rel.map_decl of_rel_decl
 
 let inductive_info sigma ((mind, _ as ind),u) =
   let mindb, oneind = Global.lookup_inductive ind in
@@ -53,7 +53,7 @@ let inductive_info sigma ((mind, _ as ind),u) =
   let env = List.fold_right push_named params (Global.env ()) in
   let info_of_ind i ind =
     let ctx = ind.mind_arity_ctxt in
-    let args, _ = List.chop ind.mind_nrealargs ctx in
+    let args, _ = Context.Rel.chop ind.mind_nrealargs ctx in
     let args' = subst_rel_context 0 subst (erel_context args) in
     let induct = ((mind, i),u) in
     let indname = Nametab.basename_of_global (GlobRef.IndRef (mind,i)) in
