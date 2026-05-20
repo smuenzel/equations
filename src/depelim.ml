@@ -169,7 +169,7 @@ let depcase ~poly ((mind, i as ind), u) =
           (Array.append (extended_rel_vect (nargs + nconstrs + i) params)
               (extended_rel_vect 0 args)))
   in
-  let ctxpred = make_assum (indna Anonymous) (obj (2 + nargs)) :: args in
+  let ctxpred = Context.Rel.add (make_assum (indna Anonymous) (obj (2 + nargs))) args in
   let app = mkApp (mkRel (nargs + nconstrs + 3),
                   (extended_rel_vect 0 ctxpred))
   in
@@ -181,9 +181,11 @@ let depcase ~poly ((mind, i as ind), u) =
   let body =
     let len = 1 (* P *) + Array.length branches in
     it_mkLambda_or_LetIn case
-      (make_assum (indna xid) (lift len indapp)
-        :: ((Array.rev_to_list branches)
-            @ (make_assum (make_annot (Name (Id.of_string "P")) (Retyping.relevance_of_sort s)) pred :: ctx)))
+      (Context.Rel.add (make_assum (indna xid) (lift len indapp))
+        (Context.Rel.append (Context.Rel.of_list (Array.rev_to_list branches))
+           (Context.Rel.add 
+              (make_assum (make_annot (Name (Id.of_string "P")) (Retyping.relevance_of_sort s)) pred)
+              ctx)))
   in
   let () = evd := Evd.minimize_universes !evd in
   let univs = Evd.univ_entry ~poly !evd in
@@ -299,11 +301,11 @@ let specialize_eqs ?with_block id =
         else if (in_block || in_eqs) && Int.equal block_count 0 then acc, in_eqs, ctx, subst, (subst1 mkProp ty)
         else aux (block_count - 1) true in_eqs ctx subst acc (subst1 mkProp ty)
       else if not in_block then
-        aux block_count in_block in_eqs (make_def na (Some b) t :: ctx) subst (lift 1 acc) ty
+        aux block_count in_block in_eqs (Context.Rel.add (make_def na (Some b) t) ctx) subst (lift 1 acc) ty
       else
-        aux block_count in_block in_eqs ctx (make_def na (Some b) t :: subst) acc ty
+        aux block_count in_block in_eqs ctx (Context.Rel.add (make_def na (Some b) t) subst) acc ty
     | Prod (na, t, b) when not in_block ->
-      aux block_count false in_eqs (make_def na None t :: ctx) subst (mkApp (lift 1 acc, [| mkRel 1 |])) b
+      aux block_count false in_eqs (Context.Rel.add (make_def na None t) ctx) subst (mkApp (lift 1 acc, [| mkRel 1 |])) b
     | Prod (na, t, b) ->
       let env' = push_rel_context ctx env in
       let env' = push_rel_context subst env' in
@@ -315,10 +317,10 @@ let specialize_eqs ?with_block id =
       (match kind !evars t' with
        | App (eq, [| eqty; x; y |]) when
            (is_global env !evars (Lazy.force logic_eq_type) eq &&
-            (noccur_between !evars 1 (List.length subst) x ||
-             noccur_between !evars 1 (List.length subst) y)) ->
+            (noccur_between !evars 1 (Context.Rel.length subst) x ||
+             noccur_between !evars 1 (Context.Rel.length subst) y)) ->
          let _, u = destPolyRef !evars eq in
-         let c, o = if noccur_between !evars 1 (List.length subst) x then x, y
+         let c, o = if noccur_between !evars 1 (Context.Rel.length subst) x then x, y
            else y, x in
          let eqr = constr_of_global_univ !evars (Lazy.force logic_eq_refl, u) in
          let p = mkApp (eqr, [| eqty; c |]) in
@@ -333,13 +335,13 @@ let specialize_eqs ?with_block id =
            acc, in_eqs, ctx, subst, ty
          else
            let e = evd_comb1 (Evarutil.new_evar ~typeclass_candidate:false env') evars t in
-           aux block_count in_block false ctx (make_def na (Some e) t :: subst) (mkApp (lift 1 acc, [| mkRel 1 |])) b)
+           aux block_count in_block false ctx (Context.Rel.add (make_def na (Some e) t) subst) (mkApp (lift 1 acc, [| mkRel 1 |])) b)
     | t -> acc, in_eqs, ctx, subst, ty
   in
   let acc, worked, ctx, subst, ty = aux (match with_block with None -> 0 | Some n -> n) 
-    (match with_block with None -> true | Some _ -> false) false [] [] (mkVar id) ty in
+    (match with_block with None -> true | Some _ -> false) false Context.Rel.empty Context.Rel.empty (mkVar id) ty in
   let subst' = nf_rel_context_evar !evars subst in
-  let subst'' = List.map (fun decl ->
+  let subst'' = Context.Rel.map_decl (fun decl ->
     let (n,b,t) = to_tuple decl in
     match b with
     | Some k when isEvar !evars k -> make_assum n t
@@ -446,7 +448,7 @@ let dependent_elim_tac ?patterns id : unit Proofview.tactic =
           allow_aliases = false;
           tactic = !Declare.Obls.default_tactic};
         program_mode = false;
-        fixdecls = [];
+        fixdecls = Context.Rel.empty;
         intenv = Constrintern.empty_internalization_env;
         notations = []
       } in
