@@ -156,7 +156,7 @@ let typecheck_rel_context env evd ctx =
 	 check_type env evd (get_type rel);
 	 Option.iter (fun c -> check_term env evd c (get_type rel)) (get_value rel);
 	 EConstr.push_rel rel env)
-      ctx env
+      ctx ~init:env
   in ()
   with e ->
     Printf.eprintf "Exception while typechecking context %s : %s\n"
@@ -337,7 +337,7 @@ let make_definition ?opaque ?(poly=PolyFlags.default) evm ?types b =
 
 let instance_constructor (cl,u) args =
   let open Context.Rel.Declaration in
-  let lenpars = List.count is_local_assum cl.Typeclasses.cl_context in
+  let lenpars = Context.Rel.count is_local_assum cl.Typeclasses.cl_context in
   let open EConstr in
   let pars = fst (List.chop lenpars args) in
     match cl.cl_impl with
@@ -559,12 +559,15 @@ let of_tuple (x, b, t) =
 let lift_rel_contextn k n sign =
   let open Context.Rel in
   let open Declaration in
-  let rec liftrec k = function
-    | rel::sign -> let (na,c,t) = to_tuple rel in
-      of_tuple (na,Option.map (Vars.liftn n k) c, Vars.liftn n k t)::(liftrec (k-1) sign)
-    | [] -> []
+  let rec liftrec k sign = 
+    match Context.Rel.uncons sign with
+    | Some (rel, sign) -> let (na,c,t) = to_tuple rel in
+      Context.Rel.add
+        (of_tuple (na,Option.map (Vars.liftn n k) c, Vars.liftn n k t))
+        (liftrec (k-1) sign)
+    | None -> Context.Rel.empty
   in
-  liftrec (Context.Rel.length ctx sign + k) sign
+  liftrec (Context.Rel.length sign + k) sign
 
 let lift_rel_context n sign = lift_rel_contextn 0 n sign
 
@@ -800,7 +803,8 @@ let mkProd_or_clear sigma decl c =
   else mkProd_or_LetIn decl c
 
 let it_mkProd_or_clear sigma ty ctx = 
-  fold_left (fun c d -> mkProd_or_clear sigma d c) ty ctx
+  Context.Rel.fold_inside
+    (fun c d -> mkProd_or_clear sigma d c) ~init:ty ctx
       
 let mkLambda_or_subst decl c =
   let open Context.Rel.Declaration in
@@ -825,19 +829,19 @@ let mkProd_or_subst_or_clear sigma decl c =
   | Some b -> subst1 b c
 
 let it_mkProd_or_subst env sigma ty ctx =
-  nf_beta env sigma (List.fold_left
-                       (fun c d -> whd_betalet env sigma (mkProd_or_LetIn d c)) ty ctx)
+  nf_beta env sigma (Context.Rel.fold_inside
+                       (fun c d -> whd_betalet env sigma (mkProd_or_LetIn d c)) ~init:ty ctx)
 
 let it_mkProd_or_clean env sigma ty ctx =
   let open Context.Rel.Declaration in
-  nf_beta env sigma (List.fold_left
+  nf_beta env sigma (Context.Rel.fold_inside
                        (fun c d -> whd_betalet env sigma
 			 (if (get_name d) == Anonymous then subst1 mkProp c
-                          else mkProd_or_LetIn d c)) ty ctx)
+                          else mkProd_or_LetIn d c)) ~init:ty ctx)
 
 let it_mkLambda_or_subst env ty ctx = 
   whd_betalet env Evd.empty
-    (List.fold_left (fun c d -> mkLambda_or_LetIn d c) ty ctx)
+    (Context.Rel.fold_inside (fun c d -> mkLambda_or_LetIn d c) ~init:ty ctx)
 
 let mkLambda_or_clear_LetIn sigma decl c =
   let open Context.Rel.Declaration in
@@ -849,13 +853,13 @@ let mkLambda_or_clear_LetIn sigma decl c =
     else mkLetIn (na, b, t, c)
 
 let it_mkLambda_or_clear_LetIn sigma ty ctx =
-  List.fold_left (fun c d -> mkLambda_or_clear_LetIn sigma d c) ty ctx
+  Context.Rel.fold_inside (fun c d -> mkLambda_or_clear_LetIn sigma d c) ~init:ty ctx
 
 let it_mkLambda_or_subst_or_clear sigma ty ctx = 
-  (List.fold_left (fun c d -> mkLambda_or_subst_or_clear sigma d c) ty ctx)
+  (Context.Rel.fold_inside (fun c d -> mkLambda_or_subst_or_clear sigma d c) ~init:ty ctx)
 
 let it_mkProd_or_subst_or_clear sigma ty ctx = 
-  (List.fold_left (fun c d -> mkProd_or_subst_or_clear sigma d c) ty ctx)
+  (Context.Rel.fold_inside (fun c d -> mkProd_or_subst_or_clear sigma d c) ~init:ty ctx)
 
 
 let lift_constrs n cs = List.map (lift n) cs
@@ -981,7 +985,7 @@ let to_tuple = Context.Rel.Declaration.to_tuple
 let to_named_tuple = Context.Named.Declaration.to_tuple
 let of_named_tuple = Context.Named.Declaration.of_tuple
 let to_context c =
-  List.map of_tuple c
+  Context.Rel.of_list_map of_tuple c
 
 let get_type = Context.Rel.Declaration.get_type
 let get_value = Context.Rel.Declaration.get_value
@@ -1004,21 +1008,21 @@ let lookup_rel = Context.Rel.lookup
 
 let named_of_rel_context ?(keeplets = false) default l =
   let acc, args, _, ctx =
-    List.fold_right
+    Context.Rel.fold_outside
       (fun decl (subst, args, ids, ctx) ->
         let decl = Context.Rel.Declaration.map_constr (substl subst) decl in
     let id = match get_name decl with Anonymous -> default () | Name id -> id in
     let d = Named.Declaration.of_rel_decl (fun _ -> id) decl in
 	let args = if keeplets ||Context.Rel.Declaration.is_local_assum decl then mkVar id :: args else args in
 	  (mkVar id :: subst, args, id :: ids, d :: ctx))
-      l ([], [], [], [])
+      l ~init:([], [], [], [])
   in acc, rev args, ctx
 
 let rel_of_named_context sigma ctx = 
   List.fold_right (fun decl (ctx',subst) ->
       let (n, b, t) = to_named_tuple decl in
       let decl = make_def (map_annot (fun n -> Name n) n) (Option.map (subst_vars sigma subst) b) (subst_vars sigma subst t) in
-      (decl :: ctx', n.binder_name :: subst)) ctx ([],[])
+      (Context.Rel.add decl ctx', n.binder_name :: subst)) ctx (Context.Rel.empty,[])
 
 let empty_hint_info = Hints.empty_hint_info
 
@@ -1032,48 +1036,52 @@ let map_decl f x =
   | LocalDef (na,b,t) -> LocalDef (na, f b, f t)
 
 let subst_rel_context k cstrs ctx = 
-  let (_, ctx') = fold_right 
+  let (_, ctx') = Context.Rel.fold_outside
     (fun decl (k, ctx') ->
-      (succ k, map_decl (substnl cstrs k) decl :: ctx'))
-    ctx (k, [])
+      (succ k, Context.Rel.add (map_decl (substnl cstrs k) decl) ctx'))
+    ctx ~init:(k, Context.Rel.empty)
   in ctx'
 
 (* A telescope is a reversed rel_context *)
 
 let subst_telescope cstr ctx = 
-  let (_, ctx') = fold_left
+  let (_, ctx') = Context.Rel.fold_inside
     (fun (k, ctx') decl ->
-      (succ k, (map_decl (substnl [cstr] k) decl) :: ctx'))
-    (0, []) ctx
-  in rev ctx'
+      (succ k, Context.Rel.add (map_decl (substnl [cstr] k) decl) ctx'))
+    ~init:(0, Context.Rel.empty) ctx
+  in Context.Rel.rev ctx'
 
 (* Substitute rel [n] by [c] in [ctx]
    Precondition: [c] is typable in [ctx] using variables 
    above [n] *)
     
 let subst_in_ctx (n : int) (c : constr) (ctx : EConstr.rel_context) : EConstr.rel_context =
-  let rec aux k after = function
-    | [] -> []
-    | decl :: before ->
-	if k == n then (subst_rel_context 0 [lift (-k) c] (List.rev after)) @ before
-	else aux (succ k) (decl :: after) before
-  in aux 1 [] ctx
+  let rec aux k after ctx =
+    match Context.Rel.uncons ctx with
+    | None -> Context.Rel.empty
+    | Some (decl, before) ->
+	if k == n then Context.Rel.append (subst_rel_context 0 [lift (-k) c] (Context.Rel.rev after)) before
+	else aux (succ k) (Context.Rel.add decl after) before
+  in aux 1 Context.Rel.empty ctx
 
 let set_in_ctx (n : int) (c : constr) (ctx : EConstr.rel_context) : EConstr.rel_context =
-  let rec aux k after = function
-    | [] -> []
-    | decl :: before ->      
+  let rec aux k after ctx =
+    match Context.Rel.uncons ctx with
+    | None -> Context.Rel.empty
+    | Some (decl, before) ->      
       if k == n then
-        (rev after) @ LocalDef (get_annot decl, lift (-k) c, get_type decl) :: before
-      else aux (succ k) (decl :: after) before
-  in aux 1 [] ctx
+        Context.Rel.append
+        (Context.Rel.rev after)
+        (Context.Rel.add (LocalDef (get_annot decl, lift (-k) c, get_type decl)) before)
+      else aux (succ k) (Context.Rel.add decl after) before
+  in aux 1 Context.Rel.empty ctx
 
 let get_id decl = Context.Named.Declaration.get_id decl
 
 let fold_named_context_reverse = Context.Named.fold_inside
 let map_rel_context = Context.Rel.map
 let map_rel_declaration = Context.Rel.Declaration.map_constr
-let map_rel_relevance f = List.map (Context.Rel.Declaration.map_relevance f)
+let map_rel_relevance f = Context.Rel.map_decl (Context.Rel.Declaration.map_relevance f)
 let map_named_declaration = Context.Named.Declaration.map_constr
 let map_named_context = Context.Named.map
 let lookup_named = Context.Named.lookup
