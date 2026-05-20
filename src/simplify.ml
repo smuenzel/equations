@@ -317,9 +317,9 @@ let _ = CErrors.register_handler begin function
 end
 
 let check_context ~where ?name env evd ctx =
-  let rec check env sigma ctx = match ctx with
-  | [] -> env, sigma
-  | decl :: ctx ->
+  let rec check env sigma ctx = match Context.Rel.uncons ctx with
+  | None -> env, sigma
+  | Some (decl, ctx) ->
     let env, sigma = check env sigma ctx in
     let open Context.Rel.Declaration in
     let sigma = match decl with
@@ -855,7 +855,7 @@ SimpFun.make ~name:"solution" begin fun (env : Environ.env) (evd : Evd.evar_map 
   let targs' = Equations_common.extended_rel_vect 1 after' in
   (* [ctx''] is just [ctx'] where we replaced the substituted variable. *)
   let ctx'' = Equations_common.subst_in_ctx rel' term' ctx' in
-  let after'', _ = CList.chop (pred rel') ctx'' in
+  let after'', _ = Context.Rel.chop (pred rel') ctx'' in
   let ty'' =
     if nondep then
       Vars.substnl [Vars.lift (-rel') term'] (pred rel') body
