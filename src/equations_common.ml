@@ -926,8 +926,9 @@ let move_after_deps id c =
       collect_vars sigma (Tacmach.pf_get_hyp_typ id gl) in
     let deps = Id.Set.diff deps iddeps in
     let find decl = Id.Set.mem (get_id decl) deps in
-    let first = 
-      match snd (List.split_when find (List.rev hyps)) with
+    let first =
+      let hyps_rev = Context.Named.to_list_rev hyps in
+      match snd (List.split_when find hyps_rev) with
       | a :: _ -> get_id a
       | [] -> user_err
         Pp.(str"Found no hypothesis on which " ++ Id.print id ++ str" depends")
@@ -1016,13 +1017,13 @@ let named_of_rel_context ?(keeplets = false) default l =
 	let args = if keeplets ||Context.Rel.Declaration.is_local_assum decl then mkVar id :: args else args in
 	  (mkVar id :: subst, args, id :: ids, d :: ctx))
       l ~init:([], [], [], [])
-  in acc, rev args, ctx
+  in acc, rev args, Context.Named.of_list ctx
 
-let rel_of_named_context sigma ctx = 
-  List.fold_right (fun decl (ctx',subst) ->
+let rel_of_named_context sigma ctx =
+  Context.Named.fold_outside (fun decl (ctx',subst) ->
       let (n, b, t) = to_named_tuple decl in
       let decl = make_def (map_annot (fun n -> Name n) n) (Option.map (subst_vars sigma subst) b) (subst_vars sigma subst t) in
-      (Context.Rel.add decl ctx', n.binder_name :: subst)) ctx (Context.Rel.empty,[])
+      (Context.Rel.add decl ctx', n.binder_name :: subst)) ctx ~init:(Context.Rel.empty,[])
 
 let empty_hint_info = Hints.empty_hint_info
 
@@ -1087,14 +1088,9 @@ let map_named_context = Context.Named.map
 let lookup_named = Context.Named.lookup
 
 let subst_in_named_ctx sigma (n : Id.t) (c : constr) (ctx : EConstr.named_context) : EConstr.named_context =
-  let rec aux after = function
-    | [] -> []
-    | decl :: before ->
-       let name = get_id decl in
-       if Id.equal name n then (rev after) @ before
-       else aux (map_named_declaration (replace_vars sigma [n,c]) decl :: after)
-                before
-  in aux [] ctx
+  let before, after = Context.Named.split_when (fun decl -> Id.equal (get_id decl) n) ctx in
+  let before = Context.Named.map_decl (map_named_declaration (replace_vars sigma [n,c])) before in
+  Context.Named.append before (Context.Named.skipn 1 after)
 
 let pp cmds = Feedback.msg_info cmds
 

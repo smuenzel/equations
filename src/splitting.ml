@@ -652,13 +652,13 @@ let term_of_tree env0 isevar sort tree =
             let ev_ctx = Evd.evar_context ev_info in
             (* [next_term] is typed under [env, next_ctx] while the evar
              * is typed under [ev_ctx] *)
-            let ev_ctx_constrs = List.map (fun decl ->
+            let ev_ctx_constrs = Context.Named.to_list_map (fun decl ->
                 let id = Context.Named.Declaration.get_id decl in
                 EConstr.mkVar id) ev_ctx in
             let rels, named = List.chop (Context.Rel.length next_ctx) ev_ctx_constrs in
             let vars_subst = List.map2 (fun decl c ->
                 let id = Context.Named.Declaration.get_id decl in
-                id, c) (Environ.named_context env) named in
+                id, c) (Context.Named.to_list (Environ.named_context env)) named in
             let term = Vars.replace_vars !evd vars_subst next_term in
             let term = Vars.substl rels term in
             (* let _ =
@@ -1097,10 +1097,10 @@ let solve_equations_obligations ~pm (flags : Equations_common.flags) recids loc 
     List.map (fun (ev, evi) ->
         if !Equations_common.debug then
           Feedback.msg_debug (str"evar type" ++ Printer.pr_econstr_env env sigma (Evd.evar_concl evi));
-        let section_length = List.length (named_context env) in
+        let section_length = Context.Named.length (named_context env) in
         let evcontext = Evd.evar_context evi in
         let local_context, section_context =
-          List.chop (List.length evcontext - section_length) evcontext
+          Context.Named.chop (Context.Named.length evcontext - section_length) evcontext
         in
         let type_ = EConstr.it_mkNamedProd_or_LetIn sigma (Evd.evar_concl evi) local_context in
         let type_ = nf_beta env sigma type_ in

@@ -619,12 +619,12 @@ let pats_of_variables = List.map (fun (i, hide) ->
 
 let lift_rel_declaration k decl = map_rel_declaration (lift k) decl
 
-let lookup_named_i id =
-  let rec aux i = function
-    | decl :: _ when Id.equal id (get_id decl) -> i, decl
-    | _ :: sign -> aux (succ i) sign
-    | [] -> raise Not_found
-  in aux 1
+let lookup_named_i id ctx =
+  let rec aux i ctx = match Context.Named.uncons ctx with
+    | Some (decl, _) when Id.equal id (get_id decl) -> i, decl
+    | Some (_, sign) -> aux (succ i) sign
+    | None -> raise Not_found
+  in aux 1 ctx
 
 let instance_of_pats env evars (ctx : rel_context) (pats : (int * bool) list) =
   let subst, _, nctx = named_of_rel_context (fun () -> raise (Invalid_argument "named_of_rel_context")) ctx in
@@ -640,7 +640,7 @@ let instance_of_pats env evars (ctx : rel_context) (pats : (int * bool) list) =
   in
   let pats' =
     List.map_i (fun i id ->
-        let i', _ = lookup_named_i id ctx' in
+        let i', _ = lookup_named_i id (Context.Named.of_list ctx') in
         CList.find_map_exn (fun (i'', hide) ->
             if i'' == i then Some (if hide then PHide i' else PRel i')
             else None) pats)
@@ -654,10 +654,10 @@ let instance_of_pats env evars (ctx : rel_context) (pats : (int * bool) list) =
             if i'' == i' then Some (if hide then PHide i else PRel i)
             else None) pats)
       1 ctx'
-  in fst (rel_of_named_context evars ctx'), pats', pats''
+  in fst (rel_of_named_context evars (Context.Named.of_list ctx')), pats', pats''
 
 let push_rel_context_eos ctx env evars =
-  if named_context env <> [] then
+  if not (Context.Named.is_empty (named_context env)) then
     let env' =
       push_named (make_named_def (annotR coq_end_of_section_id)
                     (Some (get_efresh coq_the_end_of_the_section evars))
@@ -666,7 +666,7 @@ let push_rel_context_eos ctx env evars =
   else push_rel_context ctx env
 
 let split_at_eos env sigma ctx =
-  List.split_when (fun decl ->
+  Context.Named.split_when (fun decl ->
       is_lglobal env sigma coq_end_of_section (get_named_type decl)) ctx
 
 let pr_problem p env sigma { src_ctx = delta; map_inst = patcs }=
@@ -679,7 +679,7 @@ let pr_problem p env sigma { src_ctx = delta; map_inst = patcs }=
 let rel_id ctx n = 
   Nameops.Name.get_id (pi1 (List.nth ctx (pred n)))
 
-let push_named_context = List.fold_right push_named
+let push_named_context ctx env = Context.Named.fold_outside push_named ctx ~init:env
 
 let check_unused_clauses env sigma cl =
   let unused = List.filter (fun (_, (_, used)) -> used = 0) cl in

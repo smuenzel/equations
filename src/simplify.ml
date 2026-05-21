@@ -517,7 +517,7 @@ let compose_term (env : Environ.env) (evd : Evd.evar_map ref)
       let Evd.EvarInfo ev1_info = Evd.find !evd ev1 in
       let ev1_ctx = Evd.evar_context ev1_info in
       (* Keep only the context corresponding to [ctx1]. *)
-      let named_ctx1 = CList.firstn (Context.Rel.length ctx1) ev1_ctx in
+      let named_ctx1 = Context.Named.to_list (Context.Named.firstn (Context.Rel.length ctx1) ev1_ctx) in
       (* Now keep only the names and make terms out of them. *)
       let subst_ctx1 = List.map (fun decl ->
         let id = Context.Named.Declaration.get_id decl in
@@ -1385,7 +1385,7 @@ let simplify_tac (rules : simplification_rules) : unit Proofview.tactic =
     let hyps = Proofview.Goal.hyps gl in
     let env = Environ.reset_context env in
     (* Keep aside the section variables. *)
-    let loc_hyps, sec_hyps = CList.split_when
+    let loc_hyps, sec_hyps = Context.Named.split_when
       (fun decl ->
         let id = Context.Named.Declaration.get_id decl in
         Termops.is_section_variable (Global.env ()) id) hyps in

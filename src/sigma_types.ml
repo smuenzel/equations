@@ -439,7 +439,7 @@ let uncurry_hyps name =
     let env = Goal.env gl in
     let sigma = Goal.sigma gl in
     let hyps, _ =
-      List.split_when (fun d ->
+      Context.Named.split_when (fun d ->
           is_global env sigma (Lazy.force coq_end_of_section) (get_named_type d)
           || is_section_variable (Global.env ()) (get_id d)) hyps in
     let ondecl (sigma, acc, ty) d =

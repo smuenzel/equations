@@ -102,7 +102,7 @@ let autorewrite_one b =
 
 let revert_last =
   enter_goal (fun env sigma _ ->
-    let hyp = List.hd (named_context env) in
+    let hyp = Context.Named.hd (named_context env) in
     Generalize.revert [get_id hyp])
 
 (** fix generalization *)
@@ -175,7 +175,7 @@ let mutual_fix li l =
          if try ignore (Context.Named.lookup f sign); true with Not_found -> false then
            CErrors.user_err
                     (str "Name " ++ pr_id f ++ str " already used in the environment");
-         mk_sign (LocalAssum (make_annot f (ERelevance.kind sigma r), EConstr.to_constr sigma ar) :: sign) oth
+         mk_sign (Context.Named.add (LocalAssum (make_annot f (ERelevance.kind sigma r), EConstr.to_constr sigma ar)) sign) oth
     in
     let sign = mk_sign (Environ.named_context env) all in
     let idx = Array.map_of_list pred l in
@@ -268,7 +268,7 @@ let change_in_app f args idx arg =
 
 let hyps_after sigma env pos args =
   let open Context.Named.Declaration in
-  List.fold_left (fun acc d -> Id.Set.add (get_id d) acc) Id.Set.empty env
+  Context.Named.fold_inside (fun acc d -> Id.Set.add (get_id d) acc) ~init:Id.Set.empty env
 
 let simpl_of csts =
   let opacify () = List.iter (fun (cst,_) ->

@@ -49,8 +49,8 @@ let inductive_info sigma ((mind, _ as ind),u) =
   let params_ctxt = subst_instance_context (EInstance.kind sigma u) mindb.mind_params_ctxt in
   let subst, paramargs, params =
     named_of_rel_context (fun () -> Id.of_string "param") (erel_context params_ctxt) in
-  let nparams = List.length params in
-  let env = List.fold_right push_named params (Global.env ()) in
+  let nparams = Context.Named.length params in
+  let env = Context.Named.fold_outside push_named params ~init:(Global.env ()) in
   let info_of_ind i ind =
     let ctx = ind.mind_arity_ctxt in
     let args, _ = Context.Rel.chop ind.mind_nrealargs ctx in
@@ -85,8 +85,8 @@ let eq_dec_class evd =
 
 let dec_eq evd = get_efresh logic_eqdec_dec_eq evd
 
-let vars_of_pars pars = 
-  Array.of_list (List.map (fun x -> mkVar (get_id x)) pars)
+let vars_of_pars pars =
+  Array.of_list (Context.Named.to_list_map (fun x -> mkVar (get_id x)) pars)
 
 open EConstr.Vars  
 

@@ -381,7 +381,7 @@ let dependent_elim_tac ?patterns id : unit Proofview.tactic =
     let env = Environ.reset_context env in
     let default_loc, id = id in
     (* Keep aside the section variables. *)
-    let loc_hyps, sec_hyps = CList.split_when
+    let loc_hyps, sec_hyps = Context.Named.split_when
       (fun decl ->
         let id = Context.Named.Declaration.get_id decl in
         Termops.is_section_variable (Global.env ()) id) hyps in
@@ -389,10 +389,10 @@ let dependent_elim_tac ?patterns id : unit Proofview.tactic =
 
     (* Check that [id] exists in the current context. *)
     begin try
-      let rec lookup k = function
-        | decl :: _ when Id.equal id (Context.Named.Declaration.get_id decl) -> k
-        | _ :: sign -> lookup (succ k) sign
-        | [] -> raise Not_found
+      let rec lookup k hyps = match Context.Named.uncons hyps with
+        | None -> raise Not_found
+        | Some (decl, _) when Id.equal id (Context.Named.Declaration.get_id decl) -> k
+        | Some (_, rest) -> lookup (succ k) rest
       in Proofview.tclUNIT (lookup 1 loc_hyps)
     with Not_found ->
       Tacticals.tclZEROMSG (str "No such hypothesis: " ++ Id.print id)
@@ -428,7 +428,7 @@ let dependent_elim_tac ?patterns id : unit Proofview.tactic =
         let make_clause : (Syntax.user_pat_loc) -> Syntax.pre_clause =
           DAst.with_loc_val (fun ?loc pat ->
             let lhs =
-              List.rev_map (fun decl ->
+              Context.Named.to_list_rev_map (fun decl ->
                 let decl_id = Context.Named.Declaration.get_id decl in
                 if Names.Id.equal decl_id id then DAst.make ?loc pat
                 else DAst.make Syntax.(PUVar (decl_id, Generated))) loc_hyps
